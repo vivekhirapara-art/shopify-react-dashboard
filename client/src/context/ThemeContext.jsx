@@ -4,6 +4,20 @@ const STORAGE_KEY = 'theme';
 
 const ThemeContext = createContext(null);
 
+function applyThemeToDocument(theme) {
+  if (theme === 'dark') {
+    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.remove('dark');
+  }
+  document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
+  try {
+    localStorage.setItem(STORAGE_KEY, theme);
+  } catch {
+    /* ignore */
+  }
+}
+
 function getInitialTheme() {
   try {
     return localStorage.getItem(STORAGE_KEY) || 'dark';
@@ -13,23 +27,14 @@ function getInitialTheme() {
 }
 
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(getInitialTheme);
+  const [theme, setTheme] = useState(() => {
+    const saved = getInitialTheme();
+    applyThemeToDocument(saved);
+    return saved;
+  });
 
   useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('light');
-      document.documentElement.style.colorScheme = 'dark';
-    } else {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.classList.add('light');
-      document.documentElement.style.colorScheme = 'light';
-    }
-    try {
-      localStorage.setItem(STORAGE_KEY, theme);
-    } catch {
-      /* ignore */
-    }
+    applyThemeToDocument(theme);
   }, [theme]);
 
   const setThemeMode = useCallback((next) => {

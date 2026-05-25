@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  Bell,
   ShoppingCart,
   AlertTriangle,
   CheckCircle2,
@@ -9,15 +9,7 @@ import {
   BellOff,
 } from 'lucide-react';
 import { api, timeAgo } from '../api/client';
-import {
-  PageHero,
-  GlassCard,
-  Pill,
-  PillTabs,
-  BTN_PRESS,
-  Skeleton,
-  EmptyState,
-} from '../components/premium-ui';
+import { Skeleton } from '../components/premium-ui';
 
 const TABS = ['all', 'orders', 'stock alerts', 'system'];
 const TAB_TYPES = {
@@ -28,15 +20,15 @@ const TAB_TYPES = {
 };
 
 const ICON_MAP = {
-  order: { Icon: ShoppingCart, bg: 'bg-blue-500/20 text-blue-400' },
-  stock: { Icon: AlertTriangle, bg: 'bg-amber-500/20 text-amber-400' },
-  system: { Icon: CheckCircle2, bg: 'bg-emerald-500/20 text-emerald-400' },
-  error: { Icon: XCircle, bg: 'bg-red-500/20 text-red-400' },
+  order: { Icon: ShoppingCart, bg: 'bg-blue-500/20 text-blue-600 dark:text-blue-400' },
+  stock: { Icon: AlertTriangle, bg: 'bg-amber-500/20 text-amber-600 dark:text-amber-400' },
+  system: { Icon: CheckCircle2, bg: 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' },
+  error: { Icon: XCircle, bg: 'bg-red-500/20 text-red-600 dark:text-red-400' },
 };
 
 function BellSleepSvg() {
   return (
-    <svg viewBox="0 0 120 120" className="h-24 w-24 text-slate-600" aria-hidden>
+    <svg viewBox="0 0 120 120" className="h-24 w-24 text-slate-400 dark:text-slate-600" aria-hidden>
       <path
         fill="currentColor"
         d="M60 8C38 8 20 26 20 48v12L12 76h96l-8-16V48c0-22-18-40-40-40zm0 96a16 16 0 0 0 16-16H44a16 16 0 0 0 16 16z"
@@ -46,6 +38,60 @@ function BellSleepSvg() {
         zzz
       </text>
     </svg>
+  );
+}
+
+function FilterTabs({ tabs, active, onChange, tabUnread }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {tabs.map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => onChange(t)}
+          className={
+            active === t
+              ? 'rounded-full bg-indigo-600 px-3 py-1.5 text-sm text-white'
+              : 'rounded-full bg-slate-100 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-200 dark:bg-slate-700/50 dark:text-slate-300 dark:hover:bg-slate-700'
+          }
+        >
+          {t}
+          {tabUnread[t] > 0 && t !== 'all' ? (
+            <span className="ml-1.5 text-xs opacity-80">({tabUnread[t]})</span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ClearAllModal({ onCancel, onConfirm }) {
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="mx-4 w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800">
+        <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Clear all notifications?</h3>
+        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+          Are you sure you want to delete all notifications? This cannot be undone.
+        </p>
+        <div className="mt-5 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-500 hover:bg-red-100 dark:border-red-500/50 dark:bg-red-900/20 dark:text-red-400"
+          >
+            Delete All
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -121,27 +167,36 @@ export default function Notifications() {
   }
 
   return (
-    <div className="space-y-6">
-      <PageHero
-        title="Notifications"
-        pills={
-          unread > 0 ? (
-            <Pill className="bg-red-500/30">
-              <span className="h-2 w-2 rounded-full bg-red-400" />
-              {unread} unread
-            </Pill>
-          ) : (
-            <Pill>All caught up</Pill>
-          )
-        }
-      />
+    <div className="min-h-screen space-y-6 bg-slate-50 dark:bg-slate-900">
+      {/* Hero */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700/50">
+        <div className="bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 px-6 py-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-indigo-100/90">Alerts & activity</p>
+              <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">Notifications</h1>
+            </div>
+            {unread > 0 ? (
+              <span className="inline-flex items-center gap-2 rounded-full bg-red-500/30 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm">
+                <span className="h-2 w-2 rounded-full bg-red-400" />
+                {unread} unread
+              </span>
+            ) : (
+              <span className="inline-flex rounded-full bg-white/15 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm">
+                All caught up
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
 
+      {/* Toolbar */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <PillTabs tabs={TABS} active={tab} onChange={setTab} />
-        <div className="flex flex-wrap gap-2">
+        <FilterTabs tabs={TABS} active={tab} onChange={setTab} tabUnread={tabUnread} />
+        <div className="flex flex-wrap items-center gap-2">
           {TABS.map((t) =>
             tabUnread[t] > 0 && t !== 'all' ? (
-              <span key={t} className="hidden text-xs text-slate-500 sm:inline">
+              <span key={t} className="text-xs text-slate-400 dark:text-slate-500">
                 {t}: {tabUnread[t]}
               </span>
             ) : null
@@ -149,53 +204,32 @@ export default function Notifications() {
           <button
             type="button"
             onClick={markAllRead}
-            className={`rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:text-indigo-600 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-300 dark:hover:text-white ${BTN_PRESS}`}
+            className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
           >
             Mark All Read
           </button>
           <button
             type="button"
             onClick={() => setShowClearConfirm(true)}
-            className={`rounded-xl border border-red-500 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 ${BTN_PRESS}`}
+            className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-500 hover:bg-red-50 dark:border-red-500/50 dark:text-red-400 dark:hover:bg-red-900/20"
           >
-            🗑 Clear All
+            Clear All
           </button>
         </div>
       </div>
 
       {showClearConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="page-fade-in w-full max-w-sm rounded-2xl border border-slate-200 bg-white dark:border-slate-700/50 dark:bg-slate-800 p-6 shadow-xl">
-            <p className="text-sm text-slate-600 dark:text-slate-300">
-              Are you sure you want to delete all notifications? This cannot be undone.
-            </p>
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowClearConfirm(false)}
-                className={`rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800 ${BTN_PRESS}`}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={clearAll}
-                className={`rounded-xl border border-red-500 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-500/20 ${BTN_PRESS}`}
-              >
-                Delete All
-              </button>
-            </div>
-          </div>
-        </div>
+        <ClearAllModal onCancel={() => setShowClearConfirm(false)} onConfirm={clearAll} />
       )}
 
       {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-500/30 dark:bg-red-900/20 dark:text-red-400">
           {error}
         </div>
       )}
 
-      <GlassCard delay={100} className="overflow-hidden">
+      {/* Main list card */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800/50">
         {loading ? (
           <div className="space-y-3 p-4">
             {[1, 2, 3, 4].map((i) => (
@@ -203,51 +237,61 @@ export default function Notifications() {
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="py-8">
+          <div className="flex flex-col items-center justify-center py-16 text-center">
             {items.length === 0 && (
-              <div className="mb-4 flex justify-center">
+              <div className="mb-4">
                 <BellSleepSvg />
               </div>
             )}
-            <EmptyState
-              icon={BellOff}
-              title={items.length === 0 ? 'No notifications found' : 'All caught up! No notifications.'}
-            />
+            <BellOff className="mb-3 h-10 w-10 text-slate-400 dark:text-slate-500" />
+            <p className="text-sm font-medium text-slate-600 dark:text-slate-400">
+              {items.length === 0 ? 'No notifications found' : 'All caught up! No notifications.'}
+            </p>
+            <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+              New orders and alerts will appear here
+            </p>
           </div>
         ) : (
-          <ul className="divide-y divide-slate-200 dark:divide-slate-700/50">
-            {filtered.map((n, i) => {
+          <ul>
+            {filtered.map((n) => {
               const cfg = ICON_MAP[n.type] || ICON_MAP.system;
               const { Icon } = cfg;
+              const isUnread = !n.read;
+
               return (
                 <li
                   key={n.id}
-                  className={`page-fade-in flex cursor-pointer gap-4 px-5 py-4 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/20 ${
-                    !n.read ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'bg-white dark:bg-transparent'
+                  className={`flex cursor-pointer items-start gap-4 border-b border-slate-100 bg-white p-4 transition-colors duration-150 hover:bg-slate-50 dark:border-slate-700/50 dark:bg-transparent dark:hover:bg-slate-700/30 ${
+                    isUnread
+                      ? 'border-l-2 border-l-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/10'
+                      : ''
                   }`}
-                  style={{ animationDelay: `${100 + i * 50}ms` }}
-                  onClick={() => !n.read && markRead(n.id)}
-                  onKeyDown={(e) => e.key === 'Enter' && !n.read && markRead(n.id)}
+                  onClick={() => isUnread && markRead(n.id)}
+                  onKeyDown={(e) => e.key === 'Enter' && isUnread && markRead(n.id)}
                   role="button"
                   tabIndex={0}
                 >
-                  <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${cfg.bg}`}>
+                  <div
+                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${cfg.bg}`}
+                  >
                     <Icon className="h-5 w-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-slate-900 dark:text-slate-100">{n.title}</p>
-                    <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-400">{n.message}</p>
-                    <p className="mt-1 text-xs text-slate-500">{timeAgo(n.created_at)}</p>
+                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{n.title}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">{n.message}</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">{timeAgo(n.created_at)}</p>
                   </div>
                   <div className="flex shrink-0 items-start gap-2">
-                    {!n.read && <span className="mt-2 h-2.5 w-2.5 rounded-full bg-indigo-500" />}
+                    {isUnread && (
+                      <span className="mt-2 h-2.5 w-2.5 rounded-full bg-indigo-500" aria-hidden />
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         dismiss(n.id);
                       }}
-                      className={`rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-700/50 dark:hover:text-slate-300 ${BTN_PRESS}`}
+                      className="rounded-lg p-1 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-300"
                       aria-label="Dismiss"
                     >
                       <X className="h-4 w-4" />
@@ -258,7 +302,7 @@ export default function Notifications() {
             })}
           </ul>
         )}
-      </GlassCard>
+      </div>
     </div>
   );
 }

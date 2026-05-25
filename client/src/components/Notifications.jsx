@@ -37,19 +37,21 @@ export function Toast({ notification, onClose }) {
 
 export function NotificationDropdown({ notifications, isOpen, onToggle, unreadCount, onMarkAllRead }) {
   return (
-    <div className="relative">
+    <div className="relative shrink-0">
       <button
         type="button"
         onClick={onToggle}
-        className={`relative rounded-xl border border-slate-200 bg-white p-2.5 text-slate-500 hover:border-indigo-500/40 hover:text-indigo-600 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:text-indigo-300 ${BTN_PRESS}`}
+        className={`rounded-xl border border-slate-200 bg-white p-2.5 text-slate-500 hover:border-indigo-500/40 hover:text-indigo-600 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:text-indigo-300 ${BTN_PRESS}`}
         aria-label="Notifications"
       >
-        <Bell className="h-5 w-5" />
-        {unreadCount > 0 && (
-          <span className="badge-bounce absolute -right-1 -top-1 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
-            {unreadCount > 9 ? '9+' : unreadCount}
-          </span>
-        )}
+        <div className="relative">
+          <Bell className="h-5 w-5" />
+          {unreadCount > 0 && (
+            <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </div>
       </button>
       {isOpen && (
         <>

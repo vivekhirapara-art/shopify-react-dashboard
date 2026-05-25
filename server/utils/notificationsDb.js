@@ -11,9 +11,21 @@ function createNotification({ type, title, message }) {
 }
 
 function listNotifications() {
-  return db
-    .prepare('SELECT * FROM notifications ORDER BY datetime(created_at) DESC LIMIT 200')
-    .all()
+  const rows = db
+    .prepare(
+      `SELECT * FROM notifications
+       ORDER BY datetime(created_at) DESC
+       LIMIT 200`
+    )
+    .all();
+
+  const seen = new Set();
+  return rows
+    .filter((row) => {
+      if (seen.has(row.id)) return false;
+      seen.add(row.id);
+      return true;
+    })
     .map((row) => ({ ...row, read: Boolean(row.read) }));
 }
 

@@ -5,55 +5,116 @@ const { getActiveStoreUrl } = require('../utils/storeData');
 
 const router = express.Router();
 
-function formatCurrency(value) {
-  return '$' + value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+function formatInventoryValue(value) {
+  const val = Number(value) || 0;
+  if (val >= 1_000_000_000) return `$${(val / 1_000_000_000).toFixed(2)}B`;
+  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(1)}M`;
+  if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}K`;
+  return `$${val.toFixed(2)}`;
 }
+
+const emptyPayload = {
+  total_products: 0,
+  inventory_value: '$0.00',
+  inventory_value_raw: 0,
+  low_stock: 0,
+  low_stock_products: [],
+  out_of_stock: 0,
+  total_orders: 0,
+  by_status: { active: 0, draft: 0, archived: 0 },
+  stock_distribution: { in_stock: 0, low: 0, out: 0 },
+  sales_last_30_days: [],
+  top_products_by_value: [],
+  today_summary: {
+    orders_today: 0,
+    revenue_today: 0,
+    new_customers_today: 0,
+    orders_sparkline: [],
+    revenue_sparkline: [],
+    customers_sparkline: [],
+  },
+  orders_last_14_days: [],
+  orders_this_month: 0,
+};
 
 router.get('/', (req, res) => {
   const { storeUrl } = getRequestCredentials(req);
   const activeStore = getActiveStoreUrl();
   if (storeUrl && activeStore && storeUrl !== activeStore) {
-    return res.json({
-      total_products: 0,
-      inventory_value: '$0',
-      inventory_value_raw: 0,
-      low_stock: 0,
-      out_of_stock: 0,
-      total_orders: 0,
-      by_status: { active: 0, draft: 0, archived: 0 },
-      stock_distribution: { in_stock: 0, low: 0, out: 0 },
-      sales_last_30_days: [],
-      top_products_by_value: [],
-      today_summary: {
-        orders_today: 0,
-        revenue_today: 0,
-        new_customers_today: 0,
-        orders_sparkline: [],
-        revenue_sparkline: [],
-        customers_sparkline: [],
-      },
-      orders_last_14_days: [],
-      orders_this_month: 0,
-    });
+    return res.json(emptyPayload);
   }
 
-  const products = db.prepare('SELECT * FROM products').all();
+  const inventoryResult = db
+    .prepare(
+      `SELECT SUM(CAST(price AS REAL) * CAST(stock AS INTEGER)) AS total
+       FROM (
+         SELECT shopify_id, price, stock
+         FROM products
+         GROUP BY shopify_id
+       )`
+    )
+    .get();
+  const inventoryValueRaw = inventoryResult?.total ?? 0;
 
-  const totalProducts = products.length;
-  const inventoryValue = products.reduce((sum, p) => sum + p.price * p.stock, 0);
-  const lowStock = products.filter((p) => p.stock >= 1 && p.stock <= 9).length;
-  const outOfStock = products.filter((p) => p.stock === 0).length;
-  const inStock = products.filter((p) => p.stock >= 10).length;
-  const low = products.filter((p) => p.stock >= 1 && p.stock <= 9).length;
-  const out = products.filter((p) => p.stock === 0).length;
+  const lowStockRow = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT DISTINCT shopify_id FROM products
+         WHERE stock > 0 AND stock <= 10
+       )`
+    )
+    .get();
+  const lowStock = lowStockRow?.count ?? 0;
+
+  const lowStockProducts = db
+    .prepare(
+      `SELECT shopify_id, title, price, stock, status, image, vendor, id
+       FROM products
+       WHERE stock > 0 AND stock <= 10
+       GROUP BY shopify_id
+       ORDER BY stock ASC
+       LIMIT 10`
+    )
+    .all();
+
+  const outOfStockRow = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT DISTINCT shopify_id FROM products WHERE stock = 0
+       )`
+    )
+    .get();
+  const outOfStock = outOfStockRow?.count ?? 0;
+
+  const inStockRow = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT DISTINCT shopify_id FROM products WHERE stock > 10
+       )`
+    )
+    .get();
+  const inStock = inStockRow?.count ?? 0;
+
+  const totalProductsRow = db
+    .prepare(`SELECT COUNT(DISTINCT shopify_id) AS count FROM products`)
+    .get();
+  const totalProducts = totalProductsRow?.count ?? 0;
 
   const byStatus = { active: 0, draft: 0, archived: 0 };
-  for (const p of products) {
-    const status = (p.status || 'active').toLowerCase();
+  const statusRows = db
+    .prepare(
+      `SELECT status, COUNT(*) AS count FROM (
+         SELECT shopify_id, status FROM products GROUP BY shopify_id
+       )
+       GROUP BY status`
+    )
+    .all();
+  for (const row of statusRows) {
+    const status = (row.status || 'active').toLowerCase();
     if (byStatus[status] !== undefined) {
-      byStatus[status]++;
+      byStatus[status] = row.count;
     } else {
-      byStatus.active++;
+      byStatus.active += row.count;
     }
   }
 
@@ -61,13 +122,6 @@ router.get('/', (req, res) => {
   const totalOrders = orders?.count || 0;
 
   const revenueByDay = {};
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-  const recentOrders = db
-    .prepare('SELECT total_price, created_at FROM orders WHERE created_at >= ? ORDER BY created_at')
-    .all(thirtyDaysAgo.toISOString());
-
   for (let i = 29; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
@@ -88,16 +142,17 @@ router.get('/', (req, res) => {
     revenue,
   }));
 
-  const topProducts = [...products]
-    .map((p) => ({
-      title: p.title,
-      price: p.price,
-      stock: p.stock,
-      image: p.image,
-      total_value: p.price * p.stock,
-    }))
-    .sort((a, b) => b.total_value - a.total_value)
-    .slice(0, 5);
+  const topProducts = db
+    .prepare(
+      `SELECT shopify_id, title, price, stock,
+        CAST(price AS REAL) * CAST(stock AS INTEGER) AS total_value
+       FROM products
+       WHERE LOWER(COALESCE(status, 'active')) = 'active'
+       GROUP BY shopify_id
+       ORDER BY total_value DESC
+       LIMIT 5`
+    )
+    .all();
 
   const todayKey = new Date().toISOString().split('T')[0];
   const monthStart = new Date();
@@ -161,13 +216,14 @@ router.get('/', (req, res) => {
 
   res.json({
     total_products: totalProducts,
-    inventory_value: formatCurrency(inventoryValue),
-    inventory_value_raw: inventoryValue,
+    inventory_value: formatInventoryValue(inventoryValueRaw),
+    inventory_value_raw: inventoryValueRaw,
     low_stock: lowStock,
+    low_stock_products: lowStockProducts,
     out_of_stock: outOfStock,
     total_orders: totalOrders,
     by_status: byStatus,
-    stock_distribution: { in_stock: inStock, low, out },
+    stock_distribution: { in_stock: inStock, low: lowStock, out: outOfStock },
     sales_last_30_days: salesLast30Days,
     top_products_by_value: topProducts,
     today_summary: {

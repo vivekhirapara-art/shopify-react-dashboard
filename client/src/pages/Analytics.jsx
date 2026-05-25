@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   PieChart,
   Pie,
@@ -14,7 +14,8 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { Package, DollarSign, ShoppingCart, AlertTriangle, Download, Calendar } from 'lucide-react';
-import { api, formatCurrency } from '../api/client';
+import { api, formatCurrency, formatInventoryValue, dedupeByKey } from '../api/client';
+import { useToast } from '../components/Toast';
 import {
   GlassCard,
   PageHero,
@@ -23,13 +24,96 @@ import {
   BTN_PRESS,
 } from '../components/premium-ui';
 
+const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90 };
+
+function csvCell(value) {
+  const s = String(value ?? '');
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function filterSalesByRange(sales, range) {
+  const days = RANGE_DAYS[range] ?? 30;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffKey = cutoff.toISOString().split('T')[0];
+  return (sales || []).filter((row) => row.date >= cutoffKey);
+}
+
+function buildAnalyticsCsv(data, range, salesRows, topProducts) {
+  const lines = [
+    'Store Analytics Report',
+    `Generated,${new Date().toISOString()}`,
+    `Date Range,${range}`,
+    '',
+    'Summary',
+    `Total Products,${csvCell(data?.total_products ?? 0)}`,
+    `Inventory Value,${csvCell(data?.inventory_value ?? 0)}`,
+    `Inventory Value (raw),${csvCell(data?.inventory_value_raw ?? 0)}`,
+    `Total Orders,${csvCell(data?.total_orders ?? 0)}`,
+    `Low Stock,${csvCell(data?.low_stock ?? 0)}`,
+    `Out of Stock,${csvCell(data?.out_of_stock ?? 0)}`,
+    '',
+    'Products by Status',
+    'Status,Count',
+  ];
+
+  if (data?.by_status) {
+    Object.entries(data.by_status).forEach(([name, value]) => {
+      lines.push(`${csvCell(name)},${csvCell(value)}`);
+    });
+  }
+
+  lines.push('', 'Stock Distribution', 'Category,Count');
+  if (data?.stock_distribution) {
+    const { in_stock, low, out } = data.stock_distribution;
+    lines.push(`In Stock,${csvCell(in_stock)}`);
+    lines.push(`Low,${csvCell(low)}`);
+    lines.push(`Out,${csvCell(out)}`);
+  }
+
+  lines.push('', `Revenue Trend (${range})`, 'Date,Revenue');
+  salesRows.forEach((row) => {
+    lines.push(`${csvCell(row.date)},${csvCell(row.revenue)}`);
+  });
+
+  lines.push('', 'Top 5 Products by Inventory Value', 'Rank,Product,Price,Stock,Value');
+  topProducts.forEach((p, i) => {
+    lines.push(
+      `${i + 1},${csvCell(p.title)},${csvCell(p.price)},${csvCell(p.stock)},${csvCell(p.total_value)}`
+    );
+  });
+
+  return lines.join('\n');
+}
+
+function downloadCsvFile(filename, content) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 const STATUS_COLORS = ['#6366f1', '#94a3b8', '#f59e0b'];
 const STOCK_COLORS = ['#3b82f6', '#f59e0b', '#ef4444'];
+const RANK_MEDALS = ['🥇', '🥈', '🥉'];
+
+function rankLabel(index) {
+  return RANK_MEDALS[index] ?? String(index + 1);
+}
 
 export default function Analytics() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [range, setRange] = useState('30d');
+  const { toast } = useToast();
 
   useEffect(() => {
     api
@@ -38,6 +122,36 @@ export default function Analytics() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
+
+  const salesForRange = useMemo(
+    () => filterSalesByRange(data?.sales_last_30_days, range),
+    [data?.sales_last_30_days, range]
+  );
+
+  const uniqueTop5 = useMemo(
+    () =>
+      dedupeByKey(data?.top_products_by_value || [], (p) => String(p.shopify_id)).slice(0, 5),
+    [data?.top_products_by_value]
+  );
+
+  const handleExportReport = useCallback(() => {
+    if (!data) {
+      toast('warning', 'No data', 'Analytics data is still loading.');
+      return;
+    }
+    setExporting(true);
+    try {
+      const csv = buildAnalyticsCsv(data, range, salesForRange, uniqueTop5);
+      const dateStamp = new Date().toISOString().slice(0, 10);
+      downloadCsvFile(`store-analytics-${range}-${dateStamp}.csv`, csv);
+      toast('success', 'Report exported', 'Your analytics CSV has been downloaded.');
+    } catch (err) {
+      console.error(err);
+      toast('error', 'Export failed', err.message || 'Could not generate the report.');
+    } finally {
+      setExporting(false);
+    }
+  }, [data, range, salesForRange, uniqueTop5, toast]);
 
   if (loading) {
     return <div className="flex h-64 items-center justify-center text-slate-400">Loading analytics…</div>;
@@ -73,9 +187,12 @@ export default function Analytics() {
         pills={
           <button
             type="button"
-            className={`inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm text-white ${BTN_PRESS}`}
+            onClick={handleExportReport}
+            disabled={exporting || !data}
+            className={`inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50 ${BTN_PRESS}`}
           >
-            <Download className="h-4 w-4" /> Export Report
+            <Download className={`h-4 w-4 ${exporting ? 'animate-pulse' : ''}`} />
+            {exporting ? 'Exporting…' : 'Export Report'}
           </button>
         }
       >
@@ -144,7 +261,7 @@ export default function Analytics() {
         <GlassCard className="p-5 lg:col-span-1" delay={400} borderTop="from-indigo-500 to-cyan-500">
           <h2 className="mb-4 text-sm font-medium text-slate-400">Revenue Trend</h2>
           <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={data?.sales_last_30_days || []}>
+            <LineChart data={salesForRange}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
               <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 10 }} tickFormatter={(v) => v?.slice(5)} />
               <YAxis stroke="#64748b" tick={{ fontSize: 10 }} />
@@ -170,16 +287,18 @@ export default function Analytics() {
                 </tr>
               </thead>
               <tbody>
-                {(data?.top_products_by_value || []).map((p, i) => (
+                {uniqueTop5.map((p, i) => (
                   <tr
-                    key={i}
+                    key={p.shopify_id || i}
                     className={`border-t border-slate-200 dark:border-slate-700/30 ${i % 2 === 0 ? 'bg-slate-50 dark:bg-slate-900/20' : ''}`}
                   >
-                    <td className="py-3 pr-2 text-slate-500">{i + 1}</td>
+                    <td className="py-3 pr-2 text-lg leading-none">{rankLabel(i)}</td>
                     <td className="max-w-[140px] truncate py-3 pr-2 font-medium text-slate-800 dark:text-slate-200">{p.title}</td>
-                    <td className="py-3 pr-2 text-slate-400">{formatCurrency(p.price)}</td>
-                    <td className="py-3 pr-2">{p.stock}</td>
-                    <td className="py-3 font-semibold text-indigo-400">{formatCurrency(p.total_value)}</td>
+                    <td className="py-3 pr-2 tabular-nums text-slate-600 dark:text-slate-300">{formatCurrency(p.price)}</td>
+                    <td className="py-3 pr-2 tabular-nums text-slate-800 dark:text-slate-200">{p.stock}</td>
+                    <td className="py-3 font-semibold tabular-nums text-indigo-500 dark:text-indigo-400">
+                      {formatInventoryValue(p.total_value)}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -93,23 +93,21 @@ export default function GlobalSearch() {
     results.products.length > 0 || results.orders.length > 0 || results.customers.length > 0;
 
   return (
-    <div ref={wrapRef} className="relative flex items-center">
-      <button
-        type="button"
-        onClick={() => (expanded ? close() : openSearch())}
-        className={`shrink-0 rounded-xl border border-slate-200 bg-white p-2.5 text-slate-500 transition-colors hover:text-indigo-600 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:text-indigo-300 ${BTN_PRESS} ${
-          expanded ? 'opacity-0 pointer-events-none w-0 p-0 border-0' : ''
-        }`}
-        aria-label="Search"
-      >
-        <Search className="h-5 w-5" />
-      </button>
-
-      <div
-        className={`flex items-center overflow-hidden transition-all duration-300 ease-out ${
-          expanded ? 'w-[min(400px,50vw)] opacity-100' : 'w-0 opacity-0'
-        }`}
-      >
+    <div ref={wrapRef} className="relative w-64 shrink-0">
+      {!expanded ? (
+        <button
+          type="button"
+          onClick={openSearch}
+          className={`flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-500 transition-colors hover:border-indigo-500/40 hover:text-indigo-600 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:text-indigo-300 ${BTN_PRESS}`}
+          aria-label="Search"
+        >
+          <Search className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">Search…</span>
+          <kbd className="hidden shrink-0 rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-slate-600/50 dark:bg-slate-800/80 xl:inline">
+            Ctrl+K
+          </kbd>
+        </button>
+      ) : (
         <div className="relative w-full">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
@@ -117,24 +115,22 @@ export default function GlobalSearch() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search products, orders, customers..."
-            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-20 text-sm text-slate-900 backdrop-blur-sm placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-100 dark:placeholder:text-slate-500"
+            placeholder="Search…"
+            className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-100 dark:placeholder:text-slate-500"
           />
-          <kbd className="pointer-events-none absolute right-10 top-1/2 hidden -translate-y-1/2 rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-slate-600/50 dark:bg-slate-800/80 lg:inline">
-            ESC
-          </kbd>
           <button
             type="button"
             onClick={close}
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700/50 dark:hover:text-slate-300"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700/50 dark:hover:text-slate-300"
+            aria-label="Close search"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
-      </div>
+      )}
 
       {expanded && open && query.trim() && (
-        <div className="surface-card absolute left-0 top-full z-50 mt-2 w-[min(400px,90vw)] overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl">
+        <div className="surface-card absolute left-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl">
           {loading ? (
             <p className="px-4 py-6 text-center text-sm text-slate-500">Searching…</p>
           ) : !hasResults ? (
@@ -181,12 +177,6 @@ export default function GlobalSearch() {
             </div>
           )}
         </div>
-      )}
-
-      {!expanded && (
-        <kbd className="ml-2 hidden rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-slate-700/50 dark:bg-slate-800/50 lg:inline">
-          Ctrl+K
-        </kbd>
       )}
     </div>
   );

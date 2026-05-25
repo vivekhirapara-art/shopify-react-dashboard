@@ -17,7 +17,6 @@ import {
   DollarSign,
   ShoppingCart,
   AlertTriangle,
-  Clock,
   Package2,
   Plus,
   RefreshCw,
@@ -29,7 +28,14 @@ import {
   XCircle,
   Activity,
 } from 'lucide-react';
-import { api, formatCurrency, timeAgo, parseOrdersResponse } from '../api/client';
+import {
+  api,
+  formatCurrency,
+  formatInventoryValue,
+  dedupeByKey,
+  timeAgo,
+  parseOrdersResponse,
+} from '../api/client';
 import { useApp } from '../components/Layout';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../context/ThemeContext';
@@ -97,7 +103,7 @@ export default function Dashboard() {
   const { isDark } = useTheme();
   const chartGrid = isDark ? '#334155' : '#e2e8f0';
   const chartAxis = '#64748b';
-  const { lastSync, fetchSyncStatus, setLastSync } = useApp();
+  const { fetchSyncStatus, setLastSync } = useApp();
   const storeName = user?.storeName || user?.storeUrl?.split('.')[0] || 'Store';
   const [analytics, setAnalytics] = useState(null);
   const [orders, setOrders] = useState([]);
@@ -111,19 +117,26 @@ export default function Dashboard() {
   useEffect(() => {
     async function load() {
       try {
-        const [analyticsRes, ordersRes, productsRes, notifRes, webhooksRes] = await Promise.all([
+        const [analyticsRes, ordersRes, notifRes, webhooksRes] = await Promise.all([
           api.get('/api/analytics'),
           api.get('/api/orders'),
-          api.get('/api/products'),
           api.get('/api/notifications').catch(() => ({ data: { notifications: [] } })),
           api.get('/api/settings/webhooks-status').catch(() => ({ data: { webhooks: [] } })),
         ]);
-        setAnalytics(analyticsRes.data);
-        const parsed = parseOrdersResponse(ordersRes.data).orders;
+        const analyticsData = analyticsRes.data;
+        setAnalytics(analyticsData);
+        const parsed = dedupeByKey(parseOrdersResponse(ordersRes.data).orders, (o) =>
+          String(o.shopify_order_id || o.id)
+        );
         setAllOrders(parsed);
         setOrders(parsed.slice(0, 5));
-        setLowStock(productsRes.data.filter((p) => p.stock < 10));
-        setNotifications(notifRes.data.notifications || []);
+        setLowStock(
+          dedupeByKey(analyticsData.low_stock_products || [], (p) => String(p.shopify_id || p.id))
+        );
+        const notifs = notifRes.data.notifications || [];
+        setNotifications(
+          dedupeByKey(notifs, (n) => String(n.id)).slice(0, 10)
+        );
         const hooks = webhooksRes.data.webhooks || [];
         setWebhooksActive(hooks.some((w) => w.active));
       } catch (err) {
@@ -141,12 +154,11 @@ export default function Dashboard() {
       const { data } = await api.post('/api/settings/sync-products', { type: 'manual' });
       setLastSync(data.last_sync);
       fetchSyncStatus();
-      const [analyticsRes, productsRes] = await Promise.all([
-        api.get('/api/analytics'),
-        api.get('/api/products'),
-      ]);
-      setAnalytics(analyticsRes.data);
-      setLowStock(productsRes.data.filter((p) => p.stock < 10));
+      const { data: analyticsData } = await api.get('/api/analytics');
+      setAnalytics(analyticsData);
+      setLowStock(
+        dedupeByKey(analyticsData.low_stock_products || [], (p) => String(p.shopify_id || p.id))
+      );
     } catch (e) {
       alert(e.response?.data?.error || e.message);
     } finally {
@@ -178,7 +190,7 @@ export default function Dashboard() {
 
     allOrders.slice(0, 3).forEach((o) => {
       items.push({
-        id: `o-${o.id}`,
+        id: `o-${o.shopify_order_id || o.id}`,
         type: 'order',
         text: `New order #${o.shopify_order_id} — ${o.customer_name} — ${formatCurrency(o.total_price)}`,
         time: o.created_at,
@@ -187,14 +199,16 @@ export default function Dashboard() {
 
     lowStock.slice(0, 2).forEach((p) => {
       items.push({
-        id: `s-${p.id}`,
+        id: `s-${p.shopify_id || p.id}`,
         type: 'stock',
         text: `Low stock alert — ${p.title} (${p.stock} left)`,
         time: null,
       });
     });
 
-    return items
+    const unique = dedupeByKey(items, (item) => item.id);
+
+    return unique
       .sort((a, b) => {
         if (!a.time) return 1;
         if (!b.time) return -1;
@@ -207,20 +221,24 @@ export default function Dashboard() {
     let score = 100;
     const low = analytics?.low_stock ?? 0;
     score -= Math.min(low * 5, 15);
-    if (!lastSync) score -= 10;
-    else {
-      const hours = (Date.now() - new Date(lastSync).getTime()) / 3600000;
-      if (hours > 24) score -= 10;
-    }
     if (!webhooksActive) score -= 15;
     return Math.max(0, Math.min(100, score));
-  }, [analytics, lastSync, webhooksActive]);
+  }, [analytics, webhooksActive]);
 
   const healthColor =
     healthScore > 80 ? 'text-emerald-400' : healthScore >= 50 ? 'text-amber-400' : 'text-red-400';
   const healthStroke =
     healthScore > 80 ? '#34d399' : healthScore >= 50 ? '#fbbf24' : '#f87171';
   const healthOffset = 2 * Math.PI * 42 * (1 - healthScore / 100);
+
+  const salesYDomain = useMemo(() => {
+    const values = (analytics?.sales_last_30_days || []).map((d) => d.revenue || 0);
+    if (!values.length) return [0, 1];
+    const dataMax = Math.max(...values, 0);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const cappedMax = avg > 0 ? Math.min(dataMax, avg * 3) : dataMax;
+    return [0, cappedMax || dataMax || 1];
+  }, [analytics?.sales_last_30_days]);
 
   if (loading) {
     return (
@@ -259,6 +277,9 @@ export default function Dashboard() {
   });
   const heroDate = new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   const lowCount = analytics?.low_stock ?? 0;
+  const inventoryDisplay =
+    analytics?.inventory_value ??
+    formatInventoryValue(analytics?.inventory_value_raw ?? 0);
 
   return (
     <div className="space-y-4">
@@ -281,12 +302,7 @@ export default function Dashboard() {
             <Pill>{heroDate}</Pill>
           </>
         }
-      >
-        <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-slate-500 dark:border-slate-600/50 dark:bg-slate-900/40 dark:text-slate-400">
-          <Clock className="h-3.5 w-3.5" />
-          Last sync {timeAgo(lastSync)}
-        </span>
-      </PageHero>
+      />
 
       <div
         className="page-fade-in -mx-1 flex gap-2 overflow-x-auto pb-1 scrollbar-thin"
@@ -318,7 +334,7 @@ export default function Dashboard() {
         <StatCard
           icon={DollarSign}
           label="Inventory Value"
-          displayValue={analytics?.inventory_value ?? '$0'}
+          displayValue={inventoryDisplay}
           value={0}
           iconClass="bg-emerald-500/20 text-emerald-400"
           trend={{ up: true, text: '+8% ↑' }}
@@ -379,10 +395,22 @@ export default function Dashboard() {
         <GlassCard className="p-5" delay={300} borderTop="from-indigo-600 to-indigo-400">
           <h2 className="mb-4 font-semibold text-slate-900 dark:text-slate-100">Sales Last 30 Days</h2>
           <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={chartData}>
+            <LineChart data={chartData} margin={{ top: 10, right: 20, left: 20, bottom: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={chartGrid} opacity={0.5} />
-              <XAxis dataKey="date" stroke={chartAxis} tick={{ fontSize: 11, fill: chartAxis }} tickFormatter={(v) => v?.slice(5)} />
-              <YAxis stroke={chartAxis} tick={{ fontSize: 11, fill: chartAxis }} tickFormatter={(v) => `$${v}`} />
+              <XAxis
+                dataKey="date"
+                stroke={chartAxis}
+                tick={{ fontSize: 11, fill: chartAxis }}
+                interval="preserveStartEnd"
+                tickFormatter={(v) => v?.slice(5)}
+              />
+              <YAxis
+                stroke={chartAxis}
+                width={70}
+                domain={salesYDomain}
+                tick={{ fontSize: 11, fill: chartAxis }}
+                tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`}
+              />
               <Tooltip content={<ChartTooltip formatter={(v) => formatCurrency(v)} />} />
               <Line type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2.5} dot={false} />
             </LineChart>
@@ -454,7 +482,10 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {topProducts.map((p, i) => (
-                    <tr key={p.title} className="border-b border-slate-200 hover:bg-slate-50 dark:border-slate-700/30 dark:hover:bg-slate-800/30">
+                    <tr
+                      key={p.shopify_id || p.title}
+                      className="border-b border-slate-200 hover:bg-slate-50 dark:border-slate-700/30 dark:hover:bg-slate-800/30"
+                    >
                       <td className="py-3 pr-3 font-medium text-indigo-400">#{i + 1}</td>
                       <td className="py-3 pr-3">
                         {p.image ? (
@@ -482,7 +513,9 @@ export default function Dashboard() {
                       </td>
                       <td className="py-3">
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-slate-900 dark:text-slate-100">{formatCurrency(p.total_value)}</span>
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">
+                            {formatInventoryValue(p.total_value)}
+                          </span>
                           <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-700">
                             <div
                               className="h-full rounded-full bg-indigo-500"
@@ -528,7 +561,7 @@ export default function Dashboard() {
             <li className="flex items-center gap-2 text-emerald-400">
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> All systems connected
             </li>
-            <li className={`flex items-center gap-2 ${lastSync ? 'text-emerald-400' : 'text-amber-400'}`}>
+            <li className="flex items-center gap-2 text-emerald-400">
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> Products synced
             </li>
             <li className={`flex items-center gap-2 ${lowCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
@@ -635,7 +668,7 @@ export default function Dashboard() {
               <ul className="space-y-2">
                 {lowStock.slice(0, 6).map((p) => (
                   <li
-                    key={p.id}
+                    key={p.shopify_id || p.id}
                     className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700/40 dark:bg-slate-900/30"
                   >
                     <p className="min-w-0 flex-1 truncate text-sm text-slate-800 dark:text-slate-200">{p.title}</p>

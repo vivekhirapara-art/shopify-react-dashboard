@@ -349,10 +349,10 @@ export default function Layout() {
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col lg:ml-64">
-          <header className="surface-nav sticky top-0 z-20 flex items-center justify-between gap-2 border-b px-4 py-3 sm:gap-3 sm:px-8 sm:py-4">
-            <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+          <header className="surface-nav sticky top-0 z-20 flex items-center gap-3 border-b px-4 py-3 sm:px-8 sm:py-4">
+            <div className="flex min-w-0 shrink items-center gap-2 sm:gap-3 lg:flex-1">
               {/* Mobile: menu + store identity */}
-              <div className="flex min-w-0 flex-1 items-center gap-2.5 lg:hidden">
+              <div className="flex min-w-0 items-center gap-2.5 lg:hidden">
                 <button
                   type="button"
                   className={`shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-600 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 ${BTN_PRESS}`}
@@ -386,11 +386,11 @@ export default function Layout() {
                 {pageTitle}
               </h1>
             </div>
-            <GlobalSearch />
-            <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-              <span className="hidden items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-slate-500 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 sm:flex">
-                <Clock className="h-3.5 w-3.5" />
-                {timeAgo(lastSync)}
+            <div className="ml-auto flex shrink-0 items-center gap-3">
+              <GlobalSearch />
+              <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs text-slate-500 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 md:flex">
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                {lastSync ? timeAgo(lastSync) : 'Never synced'}
               </span>
               <NotificationDropdown
                 notifications={notifications}
