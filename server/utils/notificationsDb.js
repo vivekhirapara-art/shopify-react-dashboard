@@ -10,14 +10,15 @@ function createNotification({ type, title, message }) {
   return db.prepare('SELECT * FROM notifications WHERE id = ?').get(result.lastInsertRowid);
 }
 
-function listNotifications() {
+function listNotifications(limit = 200) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200);
   const rows = db
     .prepare(
       `SELECT * FROM notifications
        ORDER BY datetime(created_at) DESC
-       LIMIT 200`
+       LIMIT ?`
     )
-    .all();
+    .all(safeLimit);
 
   const seen = new Set();
   return rows

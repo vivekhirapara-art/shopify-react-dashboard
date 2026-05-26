@@ -4,9 +4,10 @@ const { listNotifications } = require('../utils/notificationsDb');
 
 const router = express.Router();
 
-router.get('/', (_req, res) => {
+router.get('/', (req, res) => {
   try {
-    const items = listNotifications();
+    const limit = parseInt(req.query.limit, 10) || 200;
+    const items = listNotifications(limit);
     const unread = items.filter((n) => !n.read).length;
     res.json({ notifications: items, unread });
   } catch (err) {

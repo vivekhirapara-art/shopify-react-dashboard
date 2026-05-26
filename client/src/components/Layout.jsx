@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import { useState, useEffect, useCallback, useMemo, createContext, useContext } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import {
@@ -34,6 +34,11 @@ import ConnectStoreForm from './ConnectStoreForm';
 import PageWrapper from './PageWrapper';
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+function parseNotificationsResponse(data) {
+  if (Array.isArray(data)) return data;
+  return data?.notifications ?? [];
+}
 
 export const AppContext = createContext(null);
 
@@ -130,8 +135,12 @@ export default function Layout() {
   const storeInitial = (storeName[0] || 'S').toUpperCase();
   const [lastSync, setLastSync] = useState(null);
   const [notifications, setNotifications] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !n.read).length,
+    [notifications]
+  );
   const { isDark, toggleTheme } = useTheme();
   const { toast: showToast } = useToast();
   const [newOrderIds, setNewOrderIds] = useState(new Set());
@@ -159,12 +168,12 @@ export default function Layout() {
     }
   }, []);
 
-  const fetchUnreadNotifications = useCallback(async () => {
+  const fetchNotifications = useCallback(async () => {
     try {
       const { data } = await api.get('/api/notifications');
-      setUnreadCount(data.unread || 0);
-    } catch {
-      /* ignore */
+      setNotifications(parseNotificationsResponse(data));
+    } catch (err) {
+      console.error('Notifications fetch failed:', err);
     }
   }, []);
 
@@ -174,13 +183,14 @@ export default function Layout() {
 
   useEffect(() => {
     fetchSyncStatus();
-    fetchUnreadNotifications();
-    const interval = setInterval(() => {
-      fetchSyncStatus();
-      fetchUnreadNotifications();
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [fetchSyncStatus, fetchUnreadNotifications]);
+    fetchNotifications();
+    const syncInterval = setInterval(fetchSyncStatus, 60000);
+    const notifInterval = setInterval(fetchNotifications, 30000);
+    return () => {
+      clearInterval(syncInterval);
+      clearInterval(notifInterval);
+    };
+  }, [fetchSyncStatus, fetchNotifications]);
 
   useEffect(() => {
     const onAutoSyncChange = () => setAutoSync(isAutoSyncEnabled());
@@ -194,7 +204,7 @@ export default function Layout() {
       try {
         const { data } = await api.post('/api/settings/sync-products', { type: 'auto' });
         setLastSync(data.last_sync);
-        fetchUnreadNotifications();
+        fetchNotifications();
       } catch {
         /* silent */
       }
@@ -202,7 +212,7 @@ export default function Layout() {
     runProductSync();
     const id = setInterval(runProductSync, AUTO_SYNC_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [autoSync, fetchUnreadNotifications]);
+  }, [autoSync, fetchNotifications]);
 
   useEffect(() => {
     const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
@@ -210,14 +220,12 @@ export default function Layout() {
     socket.on('disconnect', () => setSocketConnected(false));
 
     socket.on('new_order', (orderData) => {
-      setNotifications((prev) => [orderData, ...prev].slice(0, 20));
-      setUnreadCount((c) => c + 1);
       showToast(
         'success',
         'New Order',
         `${orderData.customer_name || 'Guest'} — ${orderData.total_price ? `$${orderData.total_price}` : 'received'}`
       );
-      fetchUnreadNotifications();
+      fetchNotifications();
       setNewOrderIds((prev) => new Set(prev).add(orderData.shopify_order_id));
       setTimeout(() => {
         setNewOrderIds((prev) => {
@@ -229,7 +237,7 @@ export default function Layout() {
     });
 
     return () => socket.disconnect();
-  }, [fetchUnreadNotifications, showToast]);
+  }, [fetchNotifications, showToast]);
 
   function handleLogoutConfirm() {
     logout();
@@ -242,16 +250,15 @@ export default function Layout() {
     clearAppCache();
     setSwitchOpen(false);
     setNotifications([]);
-    setUnreadCount(0);
     window.location.href = '/';
   }
 
   const markAllRead = async () => {
     try {
       await api.put('/api/notifications/read-all');
-      setUnreadCount(0);
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch {
-      setUnreadCount(0);
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     }
     setDropdownOpen(false);
   };
@@ -265,8 +272,9 @@ export default function Layout() {
     notifications,
     newOrderIds,
     socketConnected,
-    addNotification: (order) => {
-      setNotifications((prev) => [order, ...prev].slice(0, 20));
+    fetchNotifications,
+    addNotification: () => {
+      fetchNotifications();
     },
   };
 
@@ -395,7 +403,10 @@ export default function Layout() {
               <NotificationDropdown
                 notifications={notifications}
                 isOpen={dropdownOpen}
-                onToggle={() => setDropdownOpen(!dropdownOpen)}
+                onToggle={() => {
+                  if (!dropdownOpen) fetchNotifications();
+                  setDropdownOpen((open) => !open);
+                }}
                 unreadCount={unreadCount}
                 onMarkAllRead={markAllRead}
               />
