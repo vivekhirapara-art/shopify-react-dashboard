@@ -50,6 +50,8 @@ const REQUIRED_SCOPES = [
   'write_products',
   'read_inventory',
   'write_inventory',
+  'read_price_rules',
+  'write_price_rules',
 ];
 
 const HEALTH_ROWS = [
@@ -195,8 +197,14 @@ export default function Settings() {
     try {
       const { data } = await api.get('/api/settings/scopes');
       setScopes(data);
-    } catch {
-      setScopes({ allOk: false, scopes: {} });
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message;
+      setScopes({
+        allOk: false,
+        scopes: Object.fromEntries(REQUIRED_SCOPES.map((s) => [s, { ok: false }])),
+        missing: [...REQUIRED_SCOPES],
+        error: msg,
+      });
     } finally {
       setScopesLoading(false);
     }
@@ -312,7 +320,11 @@ export default function Settings() {
 
   const webhookActive = (slug) => webhookStatus.find((w) => w.slug === slug)?.active;
 
-  const activeScopeCount = REQUIRED_SCOPES.filter((id) => scopes?.scopes?.[id]?.ok).length;
+  const missingScopes =
+    scopes?.missing?.length > 0
+      ? scopes.missing
+      : REQUIRED_SCOPES.filter((id) => !scopes?.scopes?.[id]?.ok);
+  const activeScopeCount = REQUIRED_SCOPES.length - missingScopes.length;
   const storeName = storeInfo.name || STORE_SLUG;
   const storeInitial = storeName.charAt(0).toUpperCase();
   const shortUrl = (path) => {
@@ -451,9 +463,14 @@ export default function Settings() {
                 <div className="flex-1">
                   <p className="text-sm font-medium text-foreground">
                     {activeScopeCount === REQUIRED_SCOPES.length
-                      ? 'All scopes active'
-                      : `${REQUIRED_SCOPES.length - activeScopeCount} missing`}
+                      ? '✅ All scopes active'
+                      : `${missingScopes.length} missing`}
                   </p>
+                  {scopes?.error && (
+                    <p className="mt-1 text-xs text-red-400">
+                      {typeof scopes.error === 'string' ? scopes.error : 'Could not load scopes'}
+                    </p>
+                  )}
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {REQUIRED_SCOPES.map((id) => {
                       const ok = scopes?.scopes?.[id]?.ok;
@@ -466,7 +483,7 @@ export default function Settings() {
                               : 'border border-red-500/30 bg-red-500/15 text-red-400'
                           }`}
                         >
-                          {ok ? '✓' : '✗'} {id}
+                          {ok ? '✅' : '❌'} {id}
                         </span>
                       );
                     })}
@@ -486,9 +503,11 @@ export default function Settings() {
                 <button
                   type="button"
                   onClick={loadScopes}
-                  className={`flex-1 rounded-xl border border-slate-300 dark:border-slate-600/50 py-2 text-xs text-muted hover:border-indigo-500/40 hover:text-foreground ${BTN_PRESS}`}
+                  disabled={scopesLoading}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-300 dark:border-slate-600/50 py-2 text-xs text-muted hover:border-indigo-500/40 hover:text-foreground disabled:opacity-60 ${BTN_PRESS}`}
                 >
-                  Re-check
+                  {scopesLoading && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                  {scopesLoading ? 'Checking…' : 'Re-check'}
                 </button>
               </div>
             </>
@@ -659,12 +678,23 @@ export default function Settings() {
       </div>
 
       <Modal open={fixModalOpen} onClose={() => setFixModalOpen(false)} title="Fix API scopes">
+        {missingScopes.length > 0 && (
+          <p className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            <span className="font-medium">Missing:</span>{' '}
+            <span className="font-mono">{missingScopes.join(', ')}</span>
+          </p>
+        )}
         <ol className="list-decimal space-y-2 pl-5 text-sm text-muted">
-          <li>Shopify Partners → App → Configuration → API scopes</li>
-          <li>Enable all missing scopes → Save</li>
-          <li>Install app on {STORE_SLUG}</li>
-          <li>New token → <code className="text-foreground">server/.env</code></li>
-          <li>Restart server → Re-check</li>
+          <li>Go to Shopify Partners → Your App → Configuration</li>
+          <li>Add the missing scopes listed above, then save changes</li>
+          <li>Uninstall the app from your store</li>
+          <li>Reinstall the app → a new access token is generated</li>
+          <li>
+            Update <code className="text-foreground">SHOPIFY_ACCESS_TOKEN</code> in{' '}
+            <code className="text-foreground">server/.env</code>
+          </li>
+          <li>Restart the server</li>
+          <li>Click “Re-check” on Settings to refresh scope status</li>
         </ol>
         <button
           type="button"

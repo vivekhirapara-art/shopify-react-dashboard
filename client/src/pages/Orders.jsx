@@ -25,7 +25,7 @@ import {
   INPUT_CLASS,
 } from '../components/premium-ui';
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const SOCKET_CONFIG = { path: '/socket.io', transports: ['polling'], upgrade: false };
 const FILTER_TABS = ['all', 'pending', 'fulfilled', 'cancelled'];
 const DATE_FILTERS = [
   { id: 'all', label: 'All' },
@@ -35,7 +35,9 @@ const DATE_FILTERS = [
 ];
 
 function normalizeStatus(status) {
-  return (status || 'pending').toLowerCase();
+  const s = (status || 'pending').toLowerCase();
+  if (s === 'paid' || s === 'partial' || s === 'partially_fulfilled') return 'fulfilled';
+  return s;
 }
 
 function OrderDetailModal({ order, onClose, onCancel, cancelling }) {
@@ -169,7 +171,7 @@ export default function Orders() {
   }, [loadOrders]);
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
+    const socket = io(SOCKET_CONFIG);
     function upsertOrder(orderData) {
       setOrders((prev) => {
         const exists = prev.some((o) => o.shopify_order_id === orderData.shopify_order_id);
@@ -184,6 +186,7 @@ export default function Orders() {
     socket.on('new_order', (d) => {
       upsertOrder(d);
       addNotification(d);
+      loadOrders();
     });
     socket.on('order_updated', upsertOrder);
     return () => socket.disconnect();

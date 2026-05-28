@@ -2,12 +2,22 @@ export {
   api,
   AUTH_STORAGE_KEY,
   STORES_HISTORY_KEY,
-  CACHE_KEYS,
   getStoredAuth,
   setAuthHeaders,
   applyAuthFromStorage,
   clearAppCache,
 } from '../utils/api';
+
+export function getProductImageSrc(url) {
+  if (!url || typeof url !== 'string') return null;
+  let normalized = url.trim();
+  if (!normalized) return null;
+  if (normalized.startsWith('//')) normalized = `https:${normalized}`;
+  if (normalized.startsWith('http://')) {
+    normalized = `https://${normalized.slice(7)}`;
+  }
+  return normalized;
+}
 
 export function formatCurrency(value) {
   return new Intl.NumberFormat('en-US', {

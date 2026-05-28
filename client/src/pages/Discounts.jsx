@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { api } from '../api/client';
+import { formatCurrency } from '../api/client';
 import {
   PageHero,
   GlassCard,
@@ -48,7 +49,7 @@ export default function Discounts() {
   const [stats, setStats] = useState({ active: 0, totalUsed: 0, expiringSoon: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [modal, setModal] = useState({ open: false, mode: 'create', discount: null });
   const [copied, setCopied] = useState(null);
   const [form, setForm] = useState({
     code: '',
@@ -94,7 +95,19 @@ export default function Discounts() {
     e.preventDefault();
     try {
       await api.post('/api/discounts', form);
-      setModalOpen(false);
+      setModal({ open: false, mode: 'create', discount: null });
+      load();
+    } catch (e) {
+      alert(e.response?.data?.error || e.message);
+    }
+  }
+
+  async function handleUpdate(e) {
+    e.preventDefault();
+    if (!modal.discount || !modal.discount.id) return;
+    try {
+      await api.put(`/api/discounts/${modal.discount.id}`, form);
+      setModal({ open: false, mode: 'create', discount: null });
       load();
     } catch (e) {
       alert(e.response?.data?.error || e.message);
@@ -111,6 +124,51 @@ export default function Discounts() {
     }
   }
 
+  function resetForm() {
+    setForm({
+      code: '',
+      type: 'percentage',
+      value: 20,
+      minimum_amount: '',
+      usage_limit: '',
+      starts_at: '',
+      ends_at: '',
+      published: true,
+    });
+  }
+
+  function openCreateModal() {
+    resetForm();
+    setModal({ open: true, mode: 'create', discount: null });
+  }
+
+  function parseDiscountToForm(d) {
+    const type =
+      d.type === 'Fixed'
+        ? 'fixed'
+        : d.type === 'Free Shipping'
+          ? 'shipping'
+          : 'percentage';
+
+    const numeric = Number(String(d.value || '').replace(/[^0-9.]/g, '')) || 0;
+
+    return {
+      code: d.code || '',
+      type,
+      value: type === 'shipping' ? 0 : numeric,
+      minimum_amount: d.minimum_amount || '',
+      usage_limit: d.usage_limit || '',
+      starts_at: d.starts_at ? String(d.starts_at).slice(0, 16) : '',
+      ends_at: d.ends_at ? String(d.ends_at).slice(0, 16) : '',
+      published: true,
+    };
+  }
+
+  function openEditModal(d) {
+    setForm(parseDiscountToForm(d));
+    setModal({ open: true, mode: 'edit', discount: d });
+  }
+
   const typeIcon = (type) => {
     if (type === 'Fixed') return DollarSign;
     if (type === 'Free Shipping') return Truck;
@@ -122,7 +180,7 @@ export default function Discounts() {
       <PageHero title="Discounts & Coupons" pills={<Pill>{stats.active} active</Pill>}>
         <button
           type="button"
-          onClick={() => setModalOpen(true)}
+          onClick={openCreateModal}
           className={`inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20 ${BTN_PRESS}`}
         >
           <Plus className="h-4 w-4" />
@@ -139,7 +197,14 @@ export default function Discounts() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard icon={Tag} label="Active Discounts" value={stats.active} iconClass="bg-indigo-500/20 text-indigo-400" delay={0} />
         <StatCard icon={Tag} label="Total Used" value={stats.totalUsed} iconClass="bg-purple-500/20 text-purple-400" delay={100} />
-        <StatCard icon={Tag} label="Revenue from Discounts" value={0} displayValue="—" iconClass="bg-emerald-500/20 text-emerald-400" delay={200} />
+        <StatCard
+          icon={Tag}
+          label="Revenue from Discounts"
+          value={0}
+          displayValue={formatCurrency(stats.revenueFromDiscounts || 0)}
+          iconClass="bg-emerald-500/20 text-emerald-400"
+          delay={200}
+        />
         <StatCard
           icon={Tag}
           label="Expiring Soon"
@@ -218,7 +283,11 @@ export default function Discounts() {
                       </td>
                       <td className="px-5 py-4">
                         <div className="flex gap-2">
-                          <button type="button" className={`text-slate-400 hover:text-indigo-400 ${BTN_PRESS}`}>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(d)}
+                            className={`text-slate-400 hover:text-indigo-400 ${BTN_PRESS}`}
+                          >
                             <Pencil className="h-4 w-4" />
                           </button>
                           <button
@@ -239,18 +308,23 @@ export default function Discounts() {
         )}
       </GlassCard>
 
-      {modalOpen && (
+      {modal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="page-fade-in max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-200 bg-white dark:border-slate-200 dark:border-slate-700/50 dark:bg-slate-800">
             <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-white">Create Discount</h2>
-                <button type="button" onClick={() => setModalOpen(false)}>
+                <h2 className="text-lg font-bold text-white">
+                  {modal.mode === 'edit' ? 'Edit Discount' : 'Create Discount'}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setModal({ open: false, mode: 'create', discount: null })}
+                >
                   <X className="h-5 w-5 text-white" />
                 </button>
               </div>
             </div>
-            <form onSubmit={handleCreate} className="space-y-4 p-6">
+            <form onSubmit={modal.mode === 'edit' ? handleUpdate : handleCreate} className="space-y-4 p-6">
               <div className="flex gap-2">
                 <input
                   placeholder="Discount code"
@@ -315,7 +389,7 @@ export default function Discounts() {
                 />
               </div>
               <button type="submit" className={`w-full py-2.5 ${GRADIENT_BTN} ${BTN_PRESS}`}>
-                Create Discount
+                {modal.mode === 'edit' ? 'Save Changes' : 'Create Discount'}
               </button>
             </form>
           </div>

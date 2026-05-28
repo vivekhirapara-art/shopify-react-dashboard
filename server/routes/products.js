@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { db } = require('../db');
 const { shopifyRequest, mapShopifyProduct } = require('../utils/shopify');
+const { normalizeProductImageUrl } = require('../utils/productImage');
 const { getRequestCredentials } = require('../middleware/shopifyContext');
 
 const router = express.Router();
@@ -27,6 +28,18 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error('Only CSV files allowed'));
+    }
+  },
+});
+
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file && typeof file.mimetype === 'string' && file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files allowed'));
     }
   },
 });
@@ -54,11 +67,12 @@ function normalizeCsvRow(row) {
 }
 
 const upsertProduct = db.prepare(`
-  INSERT INTO products (shopify_id, handle, title, price, stock, status, image, vendor, created_at)
-  VALUES (@shopify_id, @handle, @title, @price, @stock, @status, @image, @vendor, datetime('now'))
+  INSERT INTO products (shopify_id, handle, title, description, price, stock, status, image, vendor, created_at)
+  VALUES (@shopify_id, @handle, @title, @description, @price, @stock, @status, @image, @vendor, datetime('now'))
   ON CONFLICT(shopify_id) DO UPDATE SET
     handle = @handle,
     title = @title,
+    description = @description,
     price = @price,
     stock = @stock,
     status = @status,
@@ -67,7 +81,13 @@ const upsertProduct = db.prepare(`
 `);
 
 function getLocalProducts() {
-  return db.prepare('SELECT * FROM products ORDER BY created_at DESC').all();
+  return db
+    .prepare('SELECT * FROM products ORDER BY created_at DESC')
+    .all()
+    .map((p) => ({
+      ...p,
+      image: normalizeProductImageUrl(p.image),
+    }));
 }
 
 router.get('/', async (req, res) => {
@@ -78,8 +98,10 @@ router.get('/', async (req, res) => {
     const sync = db.transaction((products) => {
       for (const product of products) {
         const mapped = mapShopifyProduct(product);
+        const image = product.images?.[0]?.src || null;
         upsertProduct.run({
           ...mapped,
+          image: normalizeProductImageUrl(image) || mapped.image,
           handle: mapped.handle || '',
         });
       }
@@ -90,16 +112,7 @@ router.get('/', async (req, res) => {
     });
 
     sync(shopifyProducts);
-    const local = getLocalProducts();
-    if (shopifyProducts.length > 0) {
-      console.log(
-        'Products synced — sample handle:',
-        shopifyProducts[0].handle,
-        '→ DB:',
-        local.find((p) => p.shopify_id === String(shopifyProducts[0].id))?.handle
-      );
-    }
-    res.json(local);
+    res.json(getLocalProducts());
   } catch (err) {
     console.error('Products fetch error:', err.response?.data || err.message);
     res.status(err.response?.status || 500).json([]);
@@ -108,13 +121,14 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { title, price, stock, status, vendor, image } = req.body;
+    const { title, description, price, stock, status, vendor, image } = req.body;
 
     const payload = {
       product: {
         title: title || 'New Product',
         status: status || 'active',
         vendor: vendor || '',
+        body_html: description || '',
         variants: [
           {
             price: String(price || 0),
@@ -165,10 +179,6 @@ function handleCsvUpload(req, res, next) {
 }
 
 router.post('/import-csv', handleCsvUpload, async (req, res) => {
-  console.log('Import CSV called');
-  console.log('File:', req.file);
-  console.log('Body:', req.body);
-
   if (!req.file) {
     return res.status(400).json({ error: 'CSV file required (field name: csv)' });
   }
@@ -267,7 +277,6 @@ router.post('/import-csv', handleCsvUpload, async (req, res) => {
     .on('data', (row) => rows.push(row))
     .on('end', async () => {
       try {
-        console.log(`CSV parsed: ${rows.length} row(s)`);
         for (let i = 0; i < rows.length; i += 1) {
           await processRow(rows[i]);
         }
@@ -286,6 +295,66 @@ router.post('/import-csv', handleCsvUpload, async (req, res) => {
     });
 });
 
+router.get('/:id', async (req, res) => {
+  try {
+    const local = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    if (!local) return res.status(404).json({ error: 'Product not found' });
+
+    try {
+      const shopifyData = await shopifyRequest('GET', `/products/${local.shopify_id}.json`);
+      const mapped = mapShopifyProduct(shopifyData.product);
+      upsertProduct.run({ ...mapped, handle: mapped.handle || '' });
+      const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+      const images = Array.isArray(shopifyData.product.images)
+        ? shopifyData.product.images.map((img) => ({
+            id: img && img.id ? String(img.id) : undefined,
+            src: normalizeProductImageUrl(img && img.src),
+          }))
+        : [];
+      return res.json({ ...updated, images });
+    } catch {
+      return res.json({ ...local, images: [] });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:id/images', imageUpload.array('images', 10), async (req, res) => {
+  try {
+    const local = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    if (!local) return res.status(404).json({ error: 'Product not found' });
+
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ error: 'No images received' });
+
+    for (const file of files) {
+      const attachment = file.buffer.toString('base64');
+      await shopifyRequest('POST', `/products/${local.shopify_id}/images.json`, {
+        image: {
+          attachment,
+          filename: file.originalname || 'image.png',
+        },
+      });
+    }
+
+    const shopifyData = await shopifyRequest('GET', `/products/${local.shopify_id}.json`);
+    const mapped = mapShopifyProduct(shopifyData.product);
+    upsertProduct.run({ ...mapped, handle: mapped.handle || '' });
+    const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    const images = Array.isArray(shopifyData.product.images)
+      ? shopifyData.product.images.map((img) => ({
+          id: img && img.id ? String(img.id) : undefined,
+          src: normalizeProductImageUrl(img && img.src),
+        }))
+      : [];
+
+    return res.json({ ...updated, images });
+  } catch (err) {
+    return res.status(500).json({ error: err.response?.data?.errors || err.message });
+  }
+});
+
 router.put('/:id', async (req, res) => {
   try {
     const local = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
@@ -293,7 +362,7 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    const { title, price, stock, status, vendor, image } = req.body;
+    const { title, description, price, stock, status, vendor, image } = req.body;
 
     const shopifyData = await shopifyRequest(
       'GET',
@@ -308,6 +377,7 @@ router.put('/:id', async (req, res) => {
         title: title ?? local.title,
         status: status ?? local.status,
         vendor: vendor ?? local.vendor,
+        body_html: description ?? local.description ?? '',
         variants: [
           {
             id: variantId,

@@ -23,16 +23,27 @@ const searchRouter = require('./routes/search');
 const { shopifyContextMiddleware } = require('./middleware/shopifyContext');
 
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5174';
 
 initDatabase();
 
 const app = express();
 const server = http.createServer(app);
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (origin === CLIENT_URL) return true;
+  if (origin.startsWith('http://localhost:')) return true;
+  if (origin.startsWith('http://127.0.0.1:')) return true;
+  if (origin.endsWith('.ngrok-free.dev')) return true;
+  if (origin.endsWith('.ngrok.io')) return true;
+  return false;
+}
+
 const io = new Server(server, {
   cors: {
-    origin: CLIENT_URL,
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+    credentials: true,
     methods: ['GET', 'POST'],
   },
 });
@@ -41,7 +52,7 @@ app.set('io', io);
 
 app.use(
   cors({
-    origin: [CLIENT_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'X-Store-Url', 'X-Shopify-Token', 'Cache-Control', 'Pragma'],

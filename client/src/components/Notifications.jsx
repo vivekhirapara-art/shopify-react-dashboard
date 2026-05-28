@@ -1,7 +1,5 @@
-import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  X,
   ShoppingCart,
   Bell,
   CheckCheck,
@@ -22,35 +20,6 @@ const TYPE_ICONS = {
 function getNotificationMeta(notification) {
   const type = (notification?.type || 'system').toLowerCase();
   return TYPE_ICONS[type] || { Icon: Bell, bg: 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400' };
-}
-
-export function Toast({ notification, onClose }) {
-  useEffect(() => {
-    if (!notification) return;
-    const timer = setTimeout(onClose, 5000);
-    return () => clearTimeout(timer);
-  }, [notification, onClose]);
-
-  if (!notification) return null;
-
-  return (
-    <div className="fixed bottom-6 right-6 z-50 w-80 slide-up-bar rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl shadow-indigo-500/20 backdrop-blur-md dark:border-slate-600/60 dark:bg-slate-900/95">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-400">
-            <ShoppingCart className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="font-semibold text-slate-900 dark:text-slate-100">New Order</p>
-            <p className="text-sm text-slate-400">{notification.customer_name || 'Guest'}</p>
-          </div>
-        </div>
-        <button type="button" onClick={onClose} className={`text-slate-500 hover:text-slate-300 ${BTN_PRESS}`}>
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-  );
 }
 
 export function NotificationDropdown({
@@ -87,8 +56,15 @@ export function NotificationDropdown({
       </button>
       {isOpen && (
         <>
-          <button type="button" className="fixed inset-0 z-40" onClick={onToggle} aria-hidden />
-          <div className={`absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-2xl ${CARD} shadow-2xl`}>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 bg-black/35 backdrop-blur-[1px]"
+            onClick={onToggle}
+            aria-label="Close notifications"
+          />
+          <div
+            className={`absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-2xl ${CARD} bg-white/95 shadow-2xl dark:bg-slate-900/95`}
+          >
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700/50">
               <span className="font-semibold text-slate-900 dark:text-slate-100">Notifications</span>
               {notifications.length > 0 && onMarkAllRead && (

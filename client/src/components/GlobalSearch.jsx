@@ -93,12 +93,12 @@ export default function GlobalSearch() {
     results.products.length > 0 || results.orders.length > 0 || results.customers.length > 0;
 
   return (
-    <div ref={wrapRef} className="relative w-64 shrink-0">
+    <div ref={wrapRef} className="relative w-40 shrink-0 sm:w-64">
       {!expanded ? (
         <button
           type="button"
           onClick={openSearch}
-          className={`flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-500 transition-colors hover:border-indigo-500/40 hover:text-indigo-600 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:text-indigo-300 ${BTN_PRESS}`}
+          className={`flex h-10 w-full items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 text-left text-xs text-slate-500 shadow-sm transition-colors hover:border-indigo-500/40 hover:bg-white hover:text-indigo-600 dark:border-slate-700/50 dark:bg-slate-800/40 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-indigo-300 sm:text-sm ${BTN_PRESS}`}
           aria-label="Search"
         >
           <Search className="h-4 w-4 shrink-0" />
@@ -130,7 +130,7 @@ export default function GlobalSearch() {
       )}
 
       {expanded && open && query.trim() && (
-        <div className="surface-card absolute left-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl">
+        <div className="surface-card absolute left-0 top-full z-50 mt-2 w-[min(92vw,20rem)] overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl sm:w-64">
           {loading ? (
             <p className="px-4 py-6 text-center text-sm text-slate-500">Searching…</p>
           ) : !hasResults ? (

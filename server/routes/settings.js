@@ -7,10 +7,12 @@ const { createNotification } = require('../utils/notificationsDb');
 const router = express.Router();
 
 const upsertProduct = db.prepare(`
-  INSERT INTO products (shopify_id, title, price, stock, status, image, vendor, created_at)
-  VALUES (@shopify_id, @title, @price, @stock, @status, @image, @vendor, datetime('now'))
+  INSERT INTO products (shopify_id, handle, title, description, price, stock, status, image, vendor, created_at)
+  VALUES (@shopify_id, @handle, @title, @description, @price, @stock, @status, @image, @vendor, datetime('now'))
   ON CONFLICT(shopify_id) DO UPDATE SET
+    handle = @handle,
     title = @title,
+    description = @description,
     price = @price,
     stock = @stock,
     status = @status,
@@ -58,58 +60,75 @@ async function timedRequest(method, path, data = null) {
   }
 }
 
-async function checkScope(scope) {
-  switch (scope) {
-    case 'read_products':
-      return timedRequest('GET', '/products.json?limit=1');
-    case 'write_products':
-      return timedRequest('GET', '/products.json?limit=1');
-    case 'read_orders':
-      return timedRequest('GET', '/orders.json?limit=1');
-    case 'write_orders': {
-      const read = await timedRequest('GET', '/orders.json?limit=1');
-      if (!read.ok) return read;
-      const write = await timedRequest('POST', '/orders/0/cancel.json', {
-        restock: false,
-        reason: 'other',
-        email: false,
-      });
-      if (write.ok) return { ok: true, ms: write.ms };
-      const err = String(write.error || '');
-      if (err.includes('404') || err.includes('Not Found') || err.includes('422')) {
-        return { ok: true, ms: write.ms };
-      }
-      if (err.includes('write_orders') || err.includes('merchant approval')) {
-        return { ok: false, error: err, ms: write.ms };
-      }
-      return { ok: true, ms: write.ms };
-    }
-    case 'read_inventory':
-      return timedRequest('GET', '/inventory_items.json?limit=1');
-    case 'write_inventory':
-      return timedRequest('GET', '/inventory_items.json?limit=1');
-    default:
-      return { ok: false, error: 'Unknown scope' };
-  }
+const REQUIRED_SCOPES = [
+  'read_orders',
+  'write_orders',
+  'read_products',
+  'write_products',
+  'read_inventory',
+  'write_inventory',
+  'read_price_rules',
+  'write_price_rules',
+];
+
+/** Fetch scopes granted to the current access token from Shopify. */
+async function fetchTokenScopesFromShopify() {
+  const start = Date.now();
+  const data = await shopifyRequest('GET', '/oauth/access_scopes.json');
+  const rows = (data && data.access_scopes) || [];
+  const handles = rows.map((row) => row && row.handle).filter(Boolean);
+  return {
+    tokenScopes: handles,
+    tokenScopeSet: new Set(handles),
+    checkedAt: new Date().toISOString(),
+    ms: Date.now() - start,
+  };
 }
 
 router.get('/scopes', async (_req, res) => {
-  const scopeList = [
-    'read_orders',
-    'write_orders',
-    'read_products',
-    'write_products',
-    'read_inventory',
-    'write_inventory',
-  ];
+  try {
+    const { tokenScopes, tokenScopeSet, checkedAt, ms } = await fetchTokenScopesFromShopify();
 
-  const results = {};
-  for (const scope of scopeList) {
-    results[scope] = await checkScope(scope);
+    const scopeResults = {};
+    const missing = [];
+
+    for (const scope of REQUIRED_SCOPES) {
+      const ok = tokenScopeSet.has(scope);
+      scopeResults[scope] = { ok };
+      if (!ok) missing.push(scope);
+    }
+
+    res.json({
+      allOk: missing.length === 0,
+      required: REQUIRED_SCOPES,
+      tokenScopes,
+      scopes: scopeResults,
+      missing,
+      checkedAt,
+      ms,
+    });
+  } catch (err) {
+    const errMsg =
+      (err && err.response && err.response.data && err.response.data.errors) ||
+      (err && err.response && err.response.data && err.response.data.error) ||
+      err.message;
+
+    console.error('Scopes check failed:', errMsg);
+
+    const scopeResults = {};
+    for (const scope of REQUIRED_SCOPES) {
+      scopeResults[scope] = { ok: false, error: String(errMsg) };
+    }
+
+    res.status(err.response && err.response.status ? err.response.status : 500).json({
+      allOk: false,
+      required: REQUIRED_SCOPES,
+      tokenScopes: [],
+      scopes: scopeResults,
+      missing: [...REQUIRED_SCOPES],
+      error: errMsg,
+    });
   }
-
-  const allOk = scopeList.every((s) => results[s].ok);
-  res.json({ scopes: results, allOk });
 });
 
 router.post('/test-connection', async (_req, res) => {

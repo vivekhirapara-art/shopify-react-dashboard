@@ -1,9 +1,16 @@
 const express = require('express');
 const { db } = require('../db');
 const { getRequestCredentials } = require('../middleware/shopifyContext');
-const { getActiveStoreUrl } = require('../utils/storeData');
+const { getActiveStoreUrl, ensureStoreContext, normalizeStoreUrl } = require('../utils/storeData');
+const { normalizeProductImageUrl } = require('../utils/productImage');
+const { toLocalDateKey, getLocalDateKeysForLastDays } = require('../utils/dateUtils');
 
 const router = express.Router();
+
+/** Orders that should not count toward sales/revenue metrics */
+function isCancelledOrder(order) {
+  return String(order.status || '').toLowerCase() === 'cancelled';
+}
 
 function formatInventoryValue(value) {
   const val = Number(value) || 0;
@@ -39,8 +46,13 @@ const emptyPayload = {
 
 router.get('/', (req, res) => {
   const { storeUrl } = getRequestCredentials(req);
+  const normalizedStore = storeUrl ? ensureStoreContext(storeUrl) : null;
   const activeStore = getActiveStoreUrl();
-  if (storeUrl && activeStore && storeUrl !== activeStore) {
+  if (
+    normalizedStore &&
+    activeStore &&
+    normalizeStoreUrl(normalizedStore) !== normalizeStoreUrl(activeStore)
+  ) {
     return res.json(emptyPayload);
   }
 
@@ -122,18 +134,21 @@ router.get('/', (req, res) => {
   const totalOrders = orders?.count || 0;
 
   const revenueByDay = {};
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().split('T')[0];
+  for (const key of getLocalDateKeysForLastDays(30)) {
     revenueByDay[key] = 0;
   }
 
-  const allOrders = db.prepare('SELECT total_price, created_at FROM orders').all();
+  const allOrders = db
+    .prepare(
+      `SELECT total_price, created_at, status
+       FROM orders
+       WHERE LOWER(COALESCE(status, '')) != 'cancelled'`
+    )
+    .all();
   for (const order of allOrders) {
-    const dateKey = (order.created_at || '').split('T')[0].split(' ')[0];
-    if (revenueByDay[dateKey] !== undefined) {
-      revenueByDay[dateKey] += order.total_price;
+    const dateKey = toLocalDateKey(order.created_at);
+    if (dateKey && revenueByDay[dateKey] !== undefined) {
+      revenueByDay[dateKey] += order.total_price || 0;
     }
   }
 
@@ -144,45 +159,66 @@ router.get('/', (req, res) => {
 
   const topProducts = db
     .prepare(
-      `SELECT shopify_id, title, price, stock,
-        CAST(price AS REAL) * CAST(stock AS INTEGER) AS total_value
+      `SELECT shopify_id,
+        MAX(title) AS title,
+        MAX(CAST(price AS REAL)) AS price,
+        MAX(CAST(stock AS INTEGER)) AS stock,
+        MAX(CAST(price AS REAL) * CAST(stock AS INTEGER)) AS total_value
        FROM products
        WHERE LOWER(COALESCE(status, 'active')) = 'active'
+         AND CAST(price AS REAL) <= 100000
        GROUP BY shopify_id
        ORDER BY total_value DESC
        LIMIT 5`
     )
     .all();
 
-  const todayKey = new Date().toISOString().split('T')[0];
-  const monthStart = new Date();
-  monthStart.setDate(1);
-  monthStart.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayISO = today.toISOString();
+
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const ordersDetail = db
-    .prepare('SELECT total_price, created_at, customer_email FROM orders')
+    .prepare('SELECT total_price, created_at, customer_email, status FROM orders')
     .all();
 
-  const ordersTodayList = ordersDetail.filter((o) => (o.created_at || '').startsWith(todayKey));
+  const revenueOrders = ordersDetail.filter((o) => !isCancelledOrder(o));
+
+  const ordersTodayList = revenueOrders.filter((o) => {
+    if (!o.created_at) return false;
+    const created = new Date(
+      String(o.created_at).includes('T')
+        ? o.created_at
+        : String(o.created_at).replace(' ', 'T')
+    );
+    return !Number.isNaN(created.getTime()) && created >= new Date(todayISO);
+  });
   const revenueToday = ordersTodayList.reduce((sum, o) => sum + (o.total_price || 0), 0);
   const newCustomersToday = new Set(
     ordersTodayList.map((o) => o.customer_email).filter(Boolean)
   ).size;
 
   const ordersLast14Days = {};
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    ordersLast14Days[d.toISOString().split('T')[0]] = 0;
+  for (const key of getLocalDateKeysForLastDays(14)) {
+    ordersLast14Days[key] = 0;
   }
   let ordersThisMonth = 0;
-  for (const order of ordersDetail) {
-    const dateKey = (order.created_at || '').split('T')[0].split(' ')[0];
-    if (ordersLast14Days[dateKey] !== undefined) {
+  for (const order of revenueOrders) {
+    const dateKey = toLocalDateKey(order.created_at);
+    if (dateKey && ordersLast14Days[dateKey] !== undefined) {
       ordersLast14Days[dateKey]++;
     }
-    if (order.created_at && new Date(order.created_at) >= monthStart) {
-      ordersThisMonth++;
+    if (order.created_at) {
+      const parsed = new Date(
+        String(order.created_at).includes('T')
+          ? order.created_at
+          : String(order.created_at).replace(' ', 'T')
+      );
+      if (!Number.isNaN(parsed.getTime()) && parsed >= monthStart) {
+        ordersThisMonth++;
+      }
     }
   }
 
@@ -191,24 +227,19 @@ router.get('/', (req, res) => {
     count,
   }));
 
-  const sparkDays = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    sparkDays.push(d.toISOString().split('T')[0]);
-  }
+  const sparkDays = getLocalDateKeysForLastDays(7);
   const ordersSparkline = sparkDays.map((key) => ({
-    v: ordersDetail.filter((o) => (o.created_at || '').startsWith(key)).length,
+    v: revenueOrders.filter((o) => toLocalDateKey(o.created_at) === key).length,
   }));
   const revenueSparkline = sparkDays.map((key) => ({
-    v: ordersDetail
-      .filter((o) => (o.created_at || '').startsWith(key))
+    v: revenueOrders
+      .filter((o) => toLocalDateKey(o.created_at) === key)
       .reduce((s, o) => s + (o.total_price || 0), 0),
   }));
   const customersSparkline = sparkDays.map((key) => ({
     v: new Set(
-      ordersDetail
-        .filter((o) => (o.created_at || '').startsWith(key))
+      revenueOrders
+        .filter((o) => toLocalDateKey(o.created_at) === key)
         .map((o) => o.customer_email)
         .filter(Boolean)
     ).size,
@@ -219,13 +250,19 @@ router.get('/', (req, res) => {
     inventory_value: formatInventoryValue(inventoryValueRaw),
     inventory_value_raw: inventoryValueRaw,
     low_stock: lowStock,
-    low_stock_products: lowStockProducts,
+    low_stock_products: lowStockProducts.map((p) => ({
+      ...p,
+      image: normalizeProductImageUrl(p.image),
+    })),
     out_of_stock: outOfStock,
     total_orders: totalOrders,
     by_status: byStatus,
     stock_distribution: { in_stock: inStock, low: lowStock, out: outOfStock },
     sales_last_30_days: salesLast30Days,
-    top_products_by_value: topProducts,
+    top_products_by_value: topProducts.map((p) => ({
+      ...p,
+      image: normalizeProductImageUrl(p.image),
+    })),
     today_summary: {
       orders_today: ordersTodayList.length,
       revenue_today: revenueToday,

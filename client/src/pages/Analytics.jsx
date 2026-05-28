@@ -3,6 +3,7 @@ import {
   PieChart,
   Pie,
   Cell,
+  Legend,
   BarChart,
   Bar,
   LineChart,
@@ -100,12 +101,21 @@ function downloadCsvFile(filename, content) {
   URL.revokeObjectURL(url);
 }
 
-const STATUS_COLORS = ['#6366f1', '#94a3b8', '#f59e0b'];
+const STATUS_COLORS = { active: '#6366f1', draft: '#94a3b8', archived: '#f59e0b' };
+const STATUS_LABELS = { active: 'Active', draft: 'Draft', archived: 'Archived' };
 const STOCK_COLORS = ['#3b82f6', '#f59e0b', '#ef4444'];
-const RANK_MEDALS = ['🥇', '🥈', '🥉'];
+const MEDALS = ['🥇', '🥈', '🥉'];
 
-function rankLabel(index) {
-  return RANK_MEDALS[index] ?? String(index + 1);
+function rankDisplay(rankIndex) {
+  if (rankIndex === 0) return MEDALS[0];
+  if (rankIndex === 1) return MEDALS[1];
+  if (rankIndex === 2) return MEDALS[2];
+  return String(rankIndex + 1);
+}
+
+function statusColor(name) {
+  const key = (name || 'active').toLowerCase();
+  return STATUS_COLORS[key] || STATUS_COLORS.active;
 }
 
 export default function Analytics() {
@@ -119,7 +129,7 @@ export default function Analytics() {
     api
       .get('/api/analytics')
       .then((res) => setData(res.data))
-      .catch(console.error)
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
@@ -146,19 +156,33 @@ export default function Analytics() {
       downloadCsvFile(`store-analytics-${range}-${dateStamp}.csv`, csv);
       toast('success', 'Report exported', 'Your analytics CSV has been downloaded.');
     } catch (err) {
-      console.error(err);
       toast('error', 'Export failed', err.message || 'Could not generate the report.');
     } finally {
       setExporting(false);
     }
   }, [data, range, salesForRange, uniqueTop5, toast]);
 
+  const revenueYMax = useMemo(() => {
+    const values = salesForRange.map((d) => d.revenue || 0);
+    if (!values.length) return 1;
+    const dataMax = Math.max(...values, 0);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const capped = avg > 0 ? Math.min(dataMax, avg * 3) : dataMax;
+    const top = (capped || dataMax || 1) * 1.2;
+    return top > 0 ? top : 1;
+  }, [salesForRange]);
+
   if (loading) {
     return <div className="flex h-64 items-center justify-center text-slate-400">Loading analytics…</div>;
   }
 
   const statusData = data?.by_status
-    ? Object.entries(data.by_status).map(([name, value]) => ({ name, value }))
+    ? Object.entries(data.by_status).map(([name, value]) => ({
+        name,
+        label: STATUS_LABELS[name] || name,
+        value,
+        color: statusColor(name),
+      }))
     : [];
   const statusTotal = statusData.reduce((s, d) => s + d.value, 0);
 
@@ -221,24 +245,60 @@ export default function Analytics() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <GlassCard className="p-5 lg:col-span-1" delay={300} borderTop="from-indigo-600 to-purple-600">
+        <GlassCard className="flex min-h-[360px] flex-col overflow-visible p-5 lg:col-span-1" delay={300} borderTop="from-indigo-600 to-purple-600">
           <h2 className="mb-2 text-center text-sm font-medium text-slate-400">Products by Status</h2>
-          <div className="relative">
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie data={statusData} dataKey="value" innerRadius={55} outerRadius={85} paddingAngle={3} cx="50%" cy="50%">
-                  {statusData.map((_, i) => (
-                    <Cell key={i} fill={STATUS_COLORS[i % STATUS_COLORS.length]} />
+          <div className="pb-8">
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                <Pie
+                  data={statusData}
+                  dataKey="value"
+                  nameKey="label"
+                  innerRadius={52}
+                  outerRadius={78}
+                  paddingAngle={3}
+                  cx="50%"
+                  cy="45%"
+                  label={false}
+                >
+                  {statusData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} />
                   ))}
                 </Pie>
                 <Tooltip content={<ChartTooltip />} />
+                <Legend
+                  verticalAlign="bottom"
+                  align="center"
+                  iconType="circle"
+                  legendType="circle"
+                  wrapperStyle={{ paddingTop: 12, fontSize: 12 }}
+                  formatter={(value) => (
+                    <span className="text-slate-600 dark:text-slate-300">{value}</span>
+                  )}
+                />
               </PieChart>
             </ResponsiveContainer>
-            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-2xl font-bold text-slate-900 dark:text-slate-100">{statusTotal}</span>
-              <span className="text-xs text-slate-500">total</span>
-            </div>
           </div>
+          <ul className="mt-auto space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700/50">
+            {statusData.map((entry) => (
+              <li key={entry.name} className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: entry.color }}
+                  />
+                  {entry.label}
+                </span>
+                <span className="font-semibold tabular-nums text-slate-800 dark:text-slate-100">
+                  {entry.value}
+                </span>
+              </li>
+            ))}
+            <li className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500 dark:border-slate-700/50">
+              <span>Total products</span>
+              <span className="font-semibold tabular-nums">{statusTotal}</span>
+            </li>
+          </ul>
         </GlassCard>
 
         <GlassCard className="p-5 lg:col-span-1" delay={350} borderTop="from-purple-600 to-pink-500">
@@ -261,10 +321,27 @@ export default function Analytics() {
         <GlassCard className="p-5 lg:col-span-1" delay={400} borderTop="from-indigo-500 to-cyan-500">
           <h2 className="mb-4 text-sm font-medium text-slate-400">Revenue Trend</h2>
           <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={salesForRange}>
+            <LineChart
+              data={salesForRange}
+              margin={{ top: 12, right: 16, left: 4, bottom: 8 }}
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
-              <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 10 }} tickFormatter={(v) => v?.slice(5)} />
-              <YAxis stroke="#64748b" tick={{ fontSize: 10 }} />
+              <XAxis
+                dataKey="date"
+                stroke="#64748b"
+                tick={{ fontSize: 10 }}
+                tickFormatter={(v) => v?.slice(5)}
+                interval="preserveStartEnd"
+              />
+              <YAxis
+                stroke="#64748b"
+                tick={{ fontSize: 10 }}
+                width={56}
+                domain={[0, revenueYMax]}
+                tickFormatter={(v) =>
+                  v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v}`
+                }
+              />
               <Tooltip content={<ChartTooltip formatter={(v) => formatCurrency(v)} />} />
               <Line type="monotone" dataKey="revenue" stroke="#818cf8" strokeWidth={2} dot={false} />
             </LineChart>
@@ -292,7 +369,7 @@ export default function Analytics() {
                     key={p.shopify_id || i}
                     className={`border-t border-slate-200 dark:border-slate-700/30 ${i % 2 === 0 ? 'bg-slate-50 dark:bg-slate-900/20' : ''}`}
                   >
-                    <td className="py-3 pr-2 text-lg leading-none">{rankLabel(i)}</td>
+                    <td className="py-3 pr-2 text-lg leading-none">{rankDisplay(i)}</td>
                     <td className="max-w-[140px] truncate py-3 pr-2 font-medium text-slate-800 dark:text-slate-200">{p.title}</td>
                     <td className="py-3 pr-2 tabular-nums text-slate-600 dark:text-slate-300">{formatCurrency(p.price)}</td>
                     <td className="py-3 pr-2 tabular-nums text-slate-800 dark:text-slate-200">{p.stock}</td>

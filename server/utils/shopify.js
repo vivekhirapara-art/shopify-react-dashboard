@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { getCredentials } = require('../middleware/shopifyContext');
+const { normalizeProductImageUrl } = require('./productImage');
 
 const API_VERSION = '2024-01';
 
@@ -35,7 +36,9 @@ async function shopifyRequest(method, endpoint, data = null, overrides = {}) {
     throw err;
   }
 
-  const url = `${baseUrl}${endpoint}`;
+  // Some endpoints (like `/admin/oauth/access_scopes.json`) are NOT versioned under `/admin/api/{version}`.
+  const isOAuthEndpoint = String(endpoint || '').startsWith('/oauth/');
+  const url = isOAuthEndpoint ? `https://${storeUrl}/admin${endpoint}` : `${baseUrl}${endpoint}`;
   const config = { method, url, headers };
   if (data) config.data = data;
 
@@ -58,10 +61,11 @@ function mapShopifyProduct(product) {
     shopify_id: String(product.id),
     handle: String(product.handle || '').trim(),
     title: product.title,
+    description: product.body_html || '',
     price: parseFloat(variant.price || 0),
     stock: totalStock,
     status: product.status || 'active',
-    image: product.image?.src || product.images?.[0]?.src || null,
+    image: normalizeProductImageUrl(product.images?.[0]?.src || null),
     vendor: product.vendor || '',
   };
 }

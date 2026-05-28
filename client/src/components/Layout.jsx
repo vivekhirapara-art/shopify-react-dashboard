@@ -33,7 +33,7 @@ import { clearAppCache } from '../utils/api';
 import ConnectStoreForm from './ConnectStoreForm';
 import PageWrapper from './PageWrapper';
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const SOCKET_CONFIG = { path: '/socket.io', transports: ['polling'], upgrade: false };
 
 function parseNotificationsResponse(data) {
   if (Array.isArray(data)) return data;
@@ -173,7 +173,7 @@ export default function Layout() {
       const { data } = await api.get('/api/notifications');
       setNotifications(parseNotificationsResponse(data));
     } catch (err) {
-      console.error('Notifications fetch failed:', err);
+      /* ignore */
     }
   }, []);
 
@@ -215,7 +215,7 @@ export default function Layout() {
   }, [autoSync, fetchNotifications]);
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
+    const socket = io(SOCKET_CONFIG);
     socket.on('connect', () => setSocketConnected(true));
     socket.on('disconnect', () => setSocketConnected(false));
 
@@ -371,10 +371,11 @@ export default function Layout() {
                 </button>
                 <button
                   type="button"
-                  onClick={handleStoreRefresh}
-                  title="Click to refresh"
-                  aria-label="Click to refresh"
-                  className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left transition-all duration-200 hover:opacity-80 ${BTN_PRESS}`}
+                  onClick={() => navigate('/')}
+                  onDoubleClick={handleStoreRefresh}
+                  title="Go to Dashboard (double-click to refresh)"
+                  aria-label="Go to Dashboard (double-click to refresh)"
+                  className={`flex cursor-pointer items-center gap-2.5 text-left transition-all duration-200 hover:opacity-80 ${BTN_PRESS}`}
                 >
                   <div
                     className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-600 to-purple-600 text-xs font-bold text-white transition-all duration-200 hover:scale-105 ${
@@ -383,7 +384,7 @@ export default function Layout() {
                   >
                     {storeInitial}
                   </div>
-                  <div className="min-w-0 flex-1">
+                  <div className="hidden min-w-0 flex-1 sm:block">
                     <p className="truncate font-medium text-slate-900 dark:text-slate-100">{storeName}</p>
                     <p className="text-xs text-slate-500 dark:text-slate-400">Shopify Store</p>
                   </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -33,7 +34,7 @@ import {
 import { useToast } from '../components/Toast';
 
 const PAGE_SIZE = 20;
-const STATUS_TABS = ['all', 'active', 'draft', 'archived'];
+const STATUS_TABS = ['all', 'active', 'draft'];
 const SORT_OPTIONS = [
   { value: 'name-asc', label: 'Name A-Z' },
   { value: 'price', label: 'Price ↑' },
@@ -50,6 +51,29 @@ const emptyProduct = {
   vendor: '',
   image: '',
 };
+
+function getImageUrl(imageField) {
+  if (!imageField) return null;
+  const value = String(imageField).trim();
+  if (!value) return null;
+  if (value.startsWith('data:')) return value;
+  if (value.startsWith('http')) {
+    // If user pasted a local uploads URL, normalize to current origin so it works on ngrok too.
+    if (value.includes('/uploads/')) {
+      const key = value.split('/uploads/').pop();
+      if (key) return `${window.location.origin}/uploads/${encodeURIComponent(key)}`;
+    }
+    return encodeURI(value);
+  }
+  // Partial filename - serve from same origin (proxied to :5000 in vite.config.js)
+  return `${window.location.origin}/uploads/${encodeURIComponent(value.replace(/^\/+/, ''))}`;
+}
+
+function normalizeImageForShopify(imageField) {
+  // Shopify needs a publicly reachable URL; for uploads use current origin (ngrok).
+  const url = getImageUrl(imageField);
+  return url || undefined;
+}
 
 function getStoreUrlFromAuth() {
   const auth = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || '{}');
@@ -71,9 +95,6 @@ function openLiveStoreProduct(product) {
     : `https://${storeUrl}/products/${product.shopify_id}`;
   window.open(url, '_blank');
 }
-
-const OVERLAY_BTN_BASE =
-  'flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-white backdrop-blur-sm transition-all duration-200 ease-out hover:scale-[1.02]';
 
 const FIELD_ICONS = {
   title: Type,
@@ -122,8 +143,15 @@ function ProductModal({ title, product, onClose, onSave, saving }) {
               dragOver ? 'border-indigo-400 bg-indigo-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-600/50 dark:bg-slate-800/30'
             }`}
           >
-            {form.image ? (
-              <img src={form.image} alt="" className="max-h-40 rounded-xl object-cover" />
+            {getImageUrl(form.image) ? (
+              <img
+                src={getImageUrl(form.image)}
+                alt=""
+                className="max-h-40 rounded-xl object-cover"
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                }}
+              />
             ) : (
               <>
                 <ImageIcon className="mb-2 h-10 w-10 text-slate-500" />
@@ -148,7 +176,6 @@ function ProductModal({ title, product, onClose, onSave, saving }) {
                     >
                       <option value="active">active</option>
                       <option value="draft">draft</option>
-                      <option value="archived">archived</option>
                     </select>
                   ) : (
                     <input
@@ -247,6 +274,7 @@ function downloadCsvTemplate() {
 export default function Products() {
   const { fetchSyncStatus } = useApp();
   const { addToast } = useToast();
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -269,7 +297,11 @@ export default function Products() {
       setProducts(data);
       fetchSyncStatus();
     } catch (err) {
-      console.error(err);
+      addToast({
+        type: 'error',
+        title: 'Failed to load products',
+        message: err.response?.data?.error || err.message,
+      });
     } finally {
       setLoading(false);
     }
@@ -322,7 +354,7 @@ export default function Products() {
         stock: parseInt(form.stock, 10),
         status: form.status,
         vendor: form.vendor,
-        image: form.image || undefined,
+        image: normalizeImageForShopify(form.image),
       };
       if (modal?.mode === 'add') await api.post('/api/products', payload);
       else await api.put(`/api/products/${modal.product.id}`, payload);
@@ -439,18 +471,18 @@ export default function Products() {
             {products.length}
           </span>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
           <button
             type="button"
             onClick={() => window.open(`${api.defaults.baseURL}/api/products/export-csv`, '_blank')}
-            className={`flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:border-indigo-500/40 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-300 ${BTN_PRESS}`}
+            className={`flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:border-indigo-500/40 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-300 sm:w-auto sm:justify-start ${BTN_PRESS}`}
           >
             <Download className="h-4 w-4" /> Export
           </button>
           <button
             type="button"
             onClick={downloadCsvTemplate}
-            className={`flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:border-indigo-500/40 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-300 ${BTN_PRESS}`}
+            className={`flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:border-indigo-500/40 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-300 sm:w-auto sm:justify-start ${BTN_PRESS}`}
           >
             <Download className="h-4 w-4" /> CSV Template
           </button>
@@ -459,7 +491,7 @@ export default function Products() {
               type="button"
               disabled={importing}
               onClick={() => fileInputRef.current?.click()}
-              className={`flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:border-indigo-500/40 disabled:opacity-70 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-300 ${BTN_PRESS}`}
+              className={`flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 hover:border-indigo-500/40 disabled:opacity-70 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-300 sm:w-auto sm:justify-start ${BTN_PRESS}`}
               title="CSV must have columns: title, price, stock"
             >
               {importing ? (
@@ -492,7 +524,7 @@ export default function Products() {
           <button
             type="button"
             onClick={() => setModal({ mode: 'add', product: emptyProduct })}
-            className={`flex items-center gap-2 px-5 py-2 text-sm ${GRADIENT_BTN} ${BTN_PRESS}`}
+            className={`flex w-full items-center justify-center gap-2 px-5 py-2 text-sm sm:w-auto ${GRADIENT_BTN} ${BTN_PRESS}`}
           >
             <Plus className="h-4 w-4" /> Add Product
           </button>
@@ -570,10 +602,16 @@ export default function Products() {
           {paginated.map((product, i) => (
             <GlassCard
               key={product.id}
-              className="group relative overflow-hidden p-0"
+              className={`group/card relative overflow-hidden p-0 ${
+                selected.has(product.id) ? 'ring-2 ring-indigo-500/60' : ''
+              }`}
               delay={150 + (i % 4) * 50}
             >
-              <label className="absolute left-3 top-3 z-10 opacity-0 transition-opacity group-hover:opacity-100">
+              <label
+                className={`absolute left-3 top-3 z-10 transition-opacity ${
+                  selected.has(product.id) ? 'opacity-100' : 'opacity-0 group-hover/card:opacity-100'
+                }`}
+              >
                 <input
                   type="checkbox"
                   checked={selected.has(product.id)}
@@ -584,50 +622,35 @@ export default function Products() {
               <span className={`absolute right-3 top-3 z-10 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize ${statusClass(product.status)}`}>
                 {product.status || 'active'}
               </span>
-              <div className="group/img relative aspect-square overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900">
-                {product.image ? (
+              <div
+                className="group relative aspect-square cursor-pointer overflow-hidden rounded-t-2xl bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900"
+                onClick={() => navigate(`/products/${product.id}`)}
+              >
+                {getImageUrl(product.image) ? (
                   <img
-                    src={product.image}
+                    src={getImageUrl(product.image)}
                     alt={product.title}
-                    className="img-fade h-full w-full object-cover transition-transform duration-200 ease-out group-hover/img:scale-105"
+                    className="img-fade h-full w-full object-cover transition-transform duration-200 ease-out group-hover:scale-105"
                     onLoad={(e) => e.currentTarget.classList.add('loaded')}
+                    onError={(e) => {
+                      e.target.style.display = 'none';
+                    }}
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-slate-600 transition-transform duration-200 ease-out group-hover/img:scale-105">
+                  <div className="flex h-full items-center justify-center text-slate-600 transition-transform duration-200 ease-out group-hover:scale-105">
                     <Package className="h-12 w-12" />
                   </div>
                 )}
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 px-4 opacity-0 transition-opacity duration-200 ease-out group-hover/img:opacity-100">
-                  <button
-                    type="button"
-                    title="Open in Shopify Admin"
-                    disabled={!product.shopify_id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openAdminPanel(product);
-                    }}
-                    className={`${OVERLAY_BTN_BASE} bg-white/20 hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-50 ${BTN_PRESS}`}
-                  >
-                    <Settings className="h-4 w-4 shrink-0" />
-                    Admin Panel
-                  </button>
-                  <button
-                    type="button"
-                    title="Open live storefront product"
-                    disabled={!product.shopify_id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openLiveStoreProduct(product);
-                    }}
-                    className={`${OVERLAY_BTN_BASE} bg-indigo-500/60 hover:bg-indigo-500/75 disabled:cursor-not-allowed disabled:opacity-50 ${BTN_PRESS}`}
-                  >
-                    <ExternalLink className="h-4 w-4 shrink-0" />
-                    Live Store
-                  </button>
-                </div>
               </div>
               <div className="p-4">
-                <h3 className="truncate font-semibold text-slate-900 dark:text-slate-100">{product.title}</h3>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/products/${product.id}`)}
+                  className={`block w-full truncate text-left font-semibold text-slate-900 hover:text-indigo-300 dark:text-slate-100 ${BTN_PRESS}`}
+                  title="Open product details"
+                >
+                  {product.title}
+                </button>
                 {product.vendor && <p className="truncate text-xs text-slate-500">{product.vendor}</p>}
                 <div className="mt-2 flex items-center justify-between">
                   <span className="font-mono text-lg font-bold text-indigo-600 dark:text-indigo-400">{formatCurrency(product.price)}</span>
@@ -638,21 +661,56 @@ export default function Products() {
                 <div className="mt-2 flex gap-1">
                   <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700/50 dark:text-slate-400">{product.status}</span>
                 </div>
-                <div className="mt-3 flex gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                  <button
-                    type="button"
-                    onClick={() => setModal({ mode: 'edit', product: { ...product } })}
-                    className={`flex-1 rounded-lg border border-slate-600/50 py-2 hover:bg-indigo-500/10 ${BTN_PRESS}`}
-                  >
-                    <Pencil className="mx-auto h-4 w-4 text-slate-400" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(product.id)}
-                    className={`flex-1 rounded-lg border border-red-500/30 py-2 hover:bg-red-500/10 ${BTN_PRESS}`}
-                  >
-                    <Trash2 className="mx-auto h-4 w-4 text-red-400" />
-                  </button>
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <div className="flex flex-1 gap-2 opacity-0 transition-opacity group-hover/card:opacity-100">
+                    <button
+                      type="button"
+                      onClick={() => setModal({ mode: 'edit', product: { ...product } })}
+                      className={`flex-1 rounded-lg border border-slate-600/50 py-2 hover:bg-indigo-500/10 ${BTN_PRESS}`}
+                      title="Edit"
+                    >
+                      <Pencil className="mx-auto h-4 w-4 text-slate-400" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(product.id)}
+                      className={`flex-1 rounded-lg border border-red-500/30 py-2 hover:bg-red-500/10 ${BTN_PRESS}`}
+                      title="Delete"
+                    >
+                      <Trash2 className="mx-auto h-4 w-4 text-red-400" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="group relative">
+                      <button
+                        type="button"
+                        title="Open in Shopify Admin"
+                        disabled={!product.shopify_id}
+                        onClick={() => openAdminPanel(product)}
+                        className={`flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-200 ${BTN_PRESS}`}
+                      >
+                        <Settings className="h-4 w-4" />
+                      </button>
+                      <span className="pointer-events-none absolute -top-9 right-0 z-10 hidden whitespace-nowrap rounded-lg bg-slate-900 px-2 py-1 text-[10px] text-white group-hover:block dark:bg-slate-700">
+                        Admin Panel
+                      </span>
+                    </span>
+                    <span className="group relative">
+                      <button
+                        type="button"
+                        title="Open live storefront product"
+                        disabled={!product.shopify_id}
+                        onClick={() => openLiveStoreProduct(product)}
+                        className={`flex h-9 w-9 items-center justify-center rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-40 ${BTN_PRESS}`}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </button>
+                      <span className="pointer-events-none absolute -top-9 right-0 z-10 hidden whitespace-nowrap rounded-lg bg-slate-900 px-2 py-1 text-[10px] text-white group-hover:block dark:bg-slate-700">
+                        Live Store
+                      </span>
+                    </span>
+                  </div>
                 </div>
               </div>
             </GlassCard>

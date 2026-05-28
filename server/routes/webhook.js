@@ -27,6 +27,7 @@ function handleOrderWebhook(req, res, { event, adjustStock = false, emitCreated 
   const start = Date.now();
   try {
     const order = req.shopifyPayload;
+    console.log('Webhook received:', order && order.id);
     const orderData = saveOrderFromShopify(order, { adjustStock });
 
     if (emitCreated) {
@@ -55,10 +56,12 @@ function handleOrderWebhook(req, res, { event, adjustStock = false, emitCreated 
       }
     }
 
+    // Shopify expects a 200 OK quickly for webhooks.
     res.status(200).json({ success: true, event, order: orderData });
   } catch (err) {
     console.error(`Webhook ${event} error:`, err);
-    res.status(500).json({ error: err.message });
+    // Always return 200 so Shopify doesn't retry endlessly on our failures.
+    res.status(200).json({ success: false, event, error: err.message });
   }
 }
 

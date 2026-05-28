@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import {
   LineChart,
   Line,
@@ -32,6 +33,7 @@ import {
   api,
   formatCurrency,
   formatInventoryValue,
+  getProductImageSrc,
   dedupeByKey,
   timeAgo,
   parseOrdersResponse,
@@ -97,9 +99,50 @@ function OrdersBarShape(props) {
   );
 }
 
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-4" aria-busy="true" aria-label="Loading dashboard">
+      <div className="h-32 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50" />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <SkeletonCard key={i} />
+        ))}
+      </div>
+      <div className="h-40 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50" />
+      <div className="grid gap-4 xl:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-72 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50" />
+        ))}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="h-80 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50 lg:col-span-2" />
+        <div className="h-80 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50" />
+      </div>
+    </div>
+  );
+}
+
+async function fetchWithRetry(requestFn, attempts = 3, delayMs = 500) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await requestFn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, delayMs * (attempt + 1));
+        });
+      }
+    }
+  }
+  throw lastError;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const location = useLocation();
+  const { user, isChecking } = useAuth();
   const { isDark } = useTheme();
   const chartGrid = isDark ? '#334155' : '#e2e8f0';
   const chartAxis = '#64748b';
@@ -112,41 +155,110 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [webhooksActive, setWebhooksActive] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [dataReady, setDataReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const SOCKET_CONFIG = { path: '/socket.io', transports: ['polling'], upgrade: false };
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [analyticsRes, ordersRes, notifRes, webhooksRes] = await Promise.all([
+  const loadDashboard = useCallback(async () => {
+    if (!user?.storeUrl || !user?.accessToken) return;
+
+    setLoading(true);
+    setDataReady(false);
+    try {
+      const [analyticsRes, ordersRes, notifRes, webhooksRes] = await fetchWithRetry(() =>
+        Promise.all([
           api.get('/api/analytics'),
           api.get('/api/orders'),
           api.get('/api/notifications').catch(() => ({ data: { notifications: [] } })),
           api.get('/api/settings/webhooks-status').catch(() => ({ data: { webhooks: [] } })),
-        ]);
-        const analyticsData = analyticsRes.data;
-        setAnalytics(analyticsData);
-        const parsed = dedupeByKey(parseOrdersResponse(ordersRes.data).orders, (o) =>
-          String(o.shopify_order_id || o.id)
-        );
-        setAllOrders(parsed);
-        setOrders(parsed.slice(0, 5));
-        setLowStock(
-          dedupeByKey(analyticsData.low_stock_products || [], (p) => String(p.shopify_id || p.id))
-        );
-        const notifs = notifRes.data.notifications || [];
-        setNotifications(
-          dedupeByKey(notifs, (n) => String(n.id)).slice(0, 10)
-        );
-        const hooks = webhooksRes.data.webhooks || [];
-        setWebhooksActive(hooks.some((w) => w.active));
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
+        ])
+      );
+
+      const analyticsData = analyticsRes.data;
+      setAnalytics(analyticsData);
+
+      const parsed = dedupeByKey(parseOrdersResponse(ordersRes.data).orders, (o) =>
+        String(o.shopify_order_id || o.id)
+      );
+      setAllOrders(parsed);
+      const activeOrders = parsed.filter(
+        (o) => String(o.status || '').toLowerCase() !== 'cancelled'
+      );
+      setOrders((activeOrders.length ? activeOrders : parsed).slice(0, 5));
+
+      setLowStock(
+        dedupeByKey(analyticsData.low_stock_products || [], (p) => String(p.shopify_id || p.id))
+      );
+
+      const notifs = notifRes.data?.notifications ?? notifRes.data ?? [];
+      setNotifications(
+        dedupeByKey(Array.isArray(notifs) ? notifs : [], (n) => String(n.id)).slice(0, 10)
+      );
+
+      const hooks = webhooksRes.data.webhooks || [];
+      setWebhooksActive(hooks.some((w) => w.active));
+      setDataReady(true);
+    } catch (err) {
+      // Avoid noisy console errors for transient API failures on mobile/ngrok.
+      setDataReady(false);
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.storeUrl, user?.accessToken]);
+
+  // Wait until auth bootstrap finishes, then load with credentials on headers
+  useEffect(() => {
+    if (isChecking) return;
+    if (!user?.storeUrl || !user?.accessToken) {
+      setLoading(false);
+      return;
+    }
+    loadDashboard();
+  }, [isChecking, user?.storeUrl, user?.accessToken, loadDashboard]);
+
+  // Refetch when navigating back to Dashboard (e.g. from Products)
+  useEffect(() => {
+    if (location.pathname !== '/' || isChecking) return;
+    if (!user?.storeUrl || !user?.accessToken) return;
+    loadDashboard();
+  }, [location.pathname, location.key, isChecking, user?.storeUrl, user?.accessToken, loadDashboard]);
+
+  // Refetch when tab becomes visible again
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (
+        document.visibilityState === 'visible' &&
+        location.pathname === '/' &&
+        user?.storeUrl &&
+        user?.accessToken
+      ) {
+        loadDashboard();
       }
     }
-    load();
-  }, []);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [location.pathname, user?.storeUrl, user?.accessToken, loadDashboard]);
+
+  // Auto-refresh dashboard every 30 seconds when visible on Dashboard
+  useEffect(() => {
+    if (location.pathname !== '/' || isChecking) return undefined;
+    const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (!user?.storeUrl || !user?.accessToken) return;
+      loadDashboard();
+    }, 30000);
+    return () => clearInterval(id);
+  }, [location.pathname, isChecking, user?.storeUrl, user?.accessToken, loadDashboard]);
+
+  // Refresh immediately when server emits a new order
+  useEffect(() => {
+    const socket = io(SOCKET_CONFIG);
+    socket.on('new_order', () => {
+      if (location.pathname !== '/') return;
+      loadDashboard();
+    });
+    return () => socket.disconnect();
+  }, [location.pathname, loadDashboard]);
 
   async function handleSync() {
     setSyncing(true);
@@ -154,11 +266,7 @@ export default function Dashboard() {
       const { data } = await api.post('/api/settings/sync-products', { type: 'manual' });
       setLastSync(data.last_sync);
       fetchSyncStatus();
-      const { data: analyticsData } = await api.get('/api/analytics');
-      setAnalytics(analyticsData);
-      setLowStock(
-        dedupeByKey(analyticsData.low_stock_products || [], (p) => String(p.shopify_id || p.id))
-      );
+      await loadDashboard();
     } catch (e) {
       alert(e.response?.data?.error || e.message);
     } finally {
@@ -231,30 +339,8 @@ export default function Dashboard() {
     healthScore > 80 ? '#34d399' : healthScore >= 50 ? '#fbbf24' : '#f87171';
   const healthOffset = 2 * Math.PI * 42 * (1 - healthScore / 100);
 
-  const salesYDomain = useMemo(() => {
-    const values = (analytics?.sales_last_30_days || []).map((d) => d.revenue || 0);
-    if (!values.length) return [0, 1];
-    const dataMax = Math.max(...values, 0);
-    const avg = values.reduce((a, b) => a + b, 0) / values.length;
-    const cappedMax = avg > 0 ? Math.min(dataMax, avg * 3) : dataMax;
-    return [0, cappedMax || dataMax || 1];
-  }, [analytics?.sales_last_30_days]);
-
-  if (loading) {
-    return (
-      <div className="space-y-4">
-        <div className="h-32 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50" />
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
-            <SkeletonCard key={i} />
-          ))}
-        </div>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="h-72 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50" />
-          <div className="h-72 animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-800/50" />
-        </div>
-      </div>
-    );
+  if (loading || isChecking || !dataReady) {
+    return <DashboardSkeleton />;
   }
 
   const chartData = analytics?.sales_last_30_days || [];
@@ -407,9 +493,31 @@ export default function Dashboard() {
               <YAxis
                 stroke={chartAxis}
                 width={70}
-                domain={salesYDomain}
+                domain={[
+                  0,
+                  (dataMax) => {
+                    const values = chartData.map((d) => d.revenue || 0);
+                    const average = values.length
+                      ? values.reduce((a, b) => a + b, 0) / values.length
+                      : 0;
+                    const capped = average > 0 ? Math.min(dataMax, average * 3) : dataMax || 1;
+                    // Add headroom so line isn't glued to the top.
+                    const top = capped > 0 ? capped * 1.2 : 1;
+                    // Prevent tiny ranges that render as all "$0" ticks.
+                    if (top < 10) return 10;
+                    if (top < 100) return Math.ceil(top);
+                    return top;
+                  },
+                ]}
+                allowDecimals
                 tick={{ fontSize: 11, fill: chartAxis }}
-                tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`}
+                tickFormatter={(v) => {
+                  const n = Number(v) || 0;
+                  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+                  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+                  if (n > 0 && n < 10) return `$${n.toFixed(2)}`;
+                  return `$${n.toFixed(0)}`;
+                }}
               />
               <Tooltip content={<ChartTooltip formatter={(v) => formatCurrency(v)} />} />
               <Line type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2.5} dot={false} />
@@ -488,8 +596,14 @@ export default function Dashboard() {
                     >
                       <td className="py-3 pr-3 font-medium text-indigo-400">#{i + 1}</td>
                       <td className="py-3 pr-3">
-                        {p.image ? (
-                          <img src={p.image} alt="" className="h-9 w-9 rounded-lg object-cover" />
+                        {getProductImageSrc(p.image) ? (
+                          <img
+                            src={getProductImageSrc(p.image)}
+                            alt=""
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            className="h-9 w-9 rounded-lg object-cover"
+                          />
                         ) : (
                           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 text-xs text-white">
                             <Package className="h-4 w-4" />

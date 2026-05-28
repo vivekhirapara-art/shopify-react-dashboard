@@ -1,14 +1,38 @@
 const { db } = require('../db');
 const { mapOrderStatus } = require('./orderStatus');
 
-function saveOrderFromShopify(order, { adjustStock = false } = {}) {
-  const shopifyOrderId = String(order.id);
-  const customer = order.customer || {};
-  const customerName =
-    [customer.first_name, customer.last_name].filter(Boolean).join(' ') ||
+function getCustomerNameFromShopifyOrder(order) {
+  return (
+    (order.billing_address && order.billing_address.name) ||
+    (order.shipping_address && order.shipping_address.name) ||
+    (order.customer && order.customer.first_name && order.customer.last_name
+      ? (order.customer.first_name + ' ' + order.customer.last_name).trim()
+      : null) ||
     order.email ||
-    'Guest';
-  const customerEmail = customer.email || order.email || '';
+    'Unknown Customer'
+  );
+}
+
+function formatCustomerDisplay(row) {
+  const name = (row.customer_name || '').trim();
+  if (name && !/^guest$/i.test(name) && !/^anonymous$/i.test(name)) {
+    return name;
+  }
+  if (row.customer_email) return row.customer_email;
+  return name || `Order #${row.shopify_order_id}`;
+}
+
+function saveOrderFromShopify(order, { adjustStock = false, customerName: nameOverride } = {}) {
+  const shopifyOrderId = String(order.id);
+  const customerName =
+    nameOverride != null && nameOverride !== ''
+      ? nameOverride
+      : getCustomerNameFromShopifyOrder(order);
+  const customerEmail =
+    (order.customer && order.customer.email) ||
+    order.email ||
+    order.contact_email ||
+    '';
   const totalPrice = parseFloat(order.total_price || 0);
   const status = mapOrderStatus(order);
 
@@ -91,7 +115,7 @@ function formatOrderRow(row, items) {
   return {
     id: row.id,
     shopify_order_id: row.shopify_order_id,
-    customer_name: row.customer_name,
+    customer_name: formatCustomerDisplay(row),
     customer_email: row.customer_email,
     total_price: row.total_price,
     status: row.status,
@@ -100,4 +124,8 @@ function formatOrderRow(row, items) {
   };
 }
 
-module.exports = { saveOrderFromShopify, formatOrderRow, mapOrderStatus };
+module.exports = {
+  saveOrderFromShopify,
+  formatOrderRow,
+  getCustomerNameFromShopifyOrder,
+};

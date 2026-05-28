@@ -27,6 +27,17 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+function normalizeStoreUrlInput(storeUrl) {
+  const v = String(storeUrl || '').trim();
+  if (!v) return '';
+  return v.replace(/^https?:\/\//, '').replace(/\/$/, '');
+}
+
+function normalizeTokenInput(token) {
+  const v = String(token || '').trim();
+  return v;
+}
+
 export function clearAppCache() {
   CACHE_KEYS.forEach((key) => {
     try {
@@ -59,9 +70,11 @@ export function getStoredAuth() {
 }
 
 export function setAuthHeaders(storeUrl, accessToken) {
-  if (storeUrl && accessToken) {
-    api.defaults.headers.common['X-Store-Url'] = storeUrl;
-    api.defaults.headers.common['X-Shopify-Token'] = accessToken;
+  const normalizedStoreUrl = normalizeStoreUrlInput(storeUrl);
+  const normalizedToken = normalizeTokenInput(accessToken);
+  if (normalizedStoreUrl && normalizedToken) {
+    api.defaults.headers.common['X-Store-Url'] = normalizedStoreUrl;
+    api.defaults.headers.common['X-Shopify-Token'] = normalizedToken;
   } else {
     delete api.defaults.headers.common['X-Store-Url'];
     delete api.defaults.headers.common['X-Shopify-Token'];
@@ -83,16 +96,35 @@ api.interceptors.request.use((config) => {
   const isAuthVerify = config.url?.includes('/api/auth/verify');
   if (!isAuthVerify) {
     const auth = getStoredAuth();
-    if (auth?.storeUrl) {
-      config.headers['X-Store-Url'] = auth.storeUrl;
-    }
-    if (auth?.accessToken) {
-      config.headers['X-Shopify-Token'] = auth.accessToken;
+    const storeUrl = normalizeStoreUrlInput(auth?.storeUrl);
+    const token = normalizeTokenInput(auth?.accessToken);
+    if (storeUrl && token) {
+      config.headers['X-Store-Url'] = storeUrl;
+      config.headers['X-Shopify-Token'] = token;
+    } else {
+      delete config.headers['X-Store-Url'];
+      delete config.headers['X-Shopify-Token'];
     }
   }
   config.headers['Cache-Control'] = 'no-cache';
   config.headers['Pragma'] = 'no-cache';
   return config;
 });
+
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    const status = err?.response?.status;
+    if (status === 401 || status === 403) {
+      try {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+      setAuthHeaders(null, null);
+    }
+    return Promise.reject(err);
+  }
+);
 
 applyAuthFromStorage();

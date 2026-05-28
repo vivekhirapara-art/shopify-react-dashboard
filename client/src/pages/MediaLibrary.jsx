@@ -22,6 +22,7 @@ import {
   Skeleton,
   EmptyState,
 } from '../components/premium-ui';
+import { useToast } from '../components/Toast';
 
 function formatBytes(bytes) {
   if (!bytes) return '0 B';
@@ -32,6 +33,7 @@ function formatBytes(bytes) {
 }
 
 export default function MediaLibrary() {
+  const { toast } = useToast();
   const [media, setMedia] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -130,17 +132,37 @@ export default function MediaLibrary() {
     load();
   }
 
+  function getPublicUploadUrl(mediaItemOrFilename) {
+    const origin = window.location.origin;
+    if (!mediaItemOrFilename) return null;
+    if (typeof mediaItemOrFilename === 'string') {
+      return `${origin}/uploads/${encodeURIComponent(mediaItemOrFilename)}`;
+    }
+    const url = mediaItemOrFilename.url || '';
+    const idx = url.indexOf('/uploads/');
+    const key = idx >= 0 ? url.slice(idx + '/uploads/'.length) : mediaItemOrFilename.filename;
+    if (!key) return null;
+    return `${origin}/uploads/${encodeURIComponent(key)}`;
+  }
+
   function bulkCopyUrls() {
-    const urls = filtered.filter((m) => selected.has(m.id)).map((m) => m.url);
+    const urls = filtered
+      .filter((m) => selected.has(m.id))
+      .map((m) => getPublicUploadUrl(m))
+      .filter(Boolean);
     navigator.clipboard.writeText(urls.join('\n'));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+    toast('success', 'URLs copied', urls.length ? `URL Copied: ${urls[0]}` : '');
   }
 
-  async function copyUrl(url) {
-    await navigator.clipboard.writeText(url);
+  async function copyUrl(mediaItemOrFilename) {
+    const fullUrl = getPublicUploadUrl(mediaItemOrFilename);
+    if (!fullUrl) return;
+    await navigator.clipboard.writeText(fullUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+    toast('success', 'URL Copied', `URL Copied: ${fullUrl}`);
   }
 
   return (
@@ -259,7 +281,7 @@ export default function MediaLibrary() {
               }`}
               onClick={() => setDetail(m)}
             >
-              <img src={m.url} alt="" className="aspect-square w-full object-cover" />
+              <img src={getPublicUploadUrl(m)} alt="" className="aspect-square w-full object-cover" />
               <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/80 via-transparent to-transparent p-3 opacity-0 transition-opacity group-hover:opacity-100">
                 <p className="truncate text-xs font-medium text-white">{m.filename}</p>
                 <p className="text-xs text-slate-600 dark:text-slate-300">{formatBytes(m.size)}</p>
@@ -268,7 +290,7 @@ export default function MediaLibrary() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      copyUrl(m.url);
+                      copyUrl(m);
                     }}
                     className={`rounded-lg bg-white/10 px-2 py-1 text-xs text-white ${BTN_PRESS}`}
                   >
@@ -307,12 +329,12 @@ export default function MediaLibrary() {
         <GlassCard className="divide-y divide-slate-700/50">
           {filtered.map((m) => (
             <div key={m.id} className="flex items-center gap-4 px-4 py-3 hover:bg-slate-700/20">
-              <img src={m.url} alt="" className="h-12 w-12 rounded-lg object-cover" />
+              <img src={getPublicUploadUrl(m)} alt="" className="h-12 w-12 rounded-lg object-cover" />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium text-slate-800 dark:text-slate-200">{m.filename}</p>
                 <p className="text-xs text-slate-500">{formatBytes(m.size)}</p>
               </div>
-              <button type="button" onClick={() => copyUrl(m.url)} className={`text-indigo-400 ${BTN_PRESS}`}>
+              <button type="button" onClick={() => copyUrl(m)} className={`text-indigo-400 ${BTN_PRESS}`}>
                 <Copy className="h-4 w-4" />
               </button>
               <button type="button" onClick={() => deleteItem(m.id)} className={`text-red-400 ${BTN_PRESS}`}>
@@ -358,7 +380,7 @@ export default function MediaLibrary() {
               </p>
               <div className="flex gap-2">
                 <input readOnly value={detail.url} className="flex-1 rounded-lg bg-slate-100 dark:bg-slate-800/50 px-3 py-2 text-xs text-slate-600 dark:text-slate-300" />
-                <button type="button" onClick={() => copyUrl(detail.url)} className={`${GRADIENT_BTN} px-3 py-2 ${BTN_PRESS}`}>
+                <button type="button" onClick={() => copyUrl(detail)} className={`${GRADIENT_BTN} px-3 py-2 ${BTN_PRESS}`}>
                   {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                 </button>
               </div>

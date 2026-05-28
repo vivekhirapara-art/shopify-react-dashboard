@@ -1,7 +1,11 @@
 const express = require('express');
 const { db } = require('../db');
 const { shopifyRequest } = require('../utils/shopify');
-const { saveOrderFromShopify, formatOrderRow } = require('../utils/orderDb');
+const {
+  saveOrderFromShopify,
+  formatOrderRow,
+  getCustomerNameFromShopifyOrder,
+} = require('../utils/orderDb');
 const { getRequestCredentials } = require('../middleware/shopifyContext');
 
 const router = express.Router();
@@ -16,7 +20,8 @@ router.get('/', async (req, res) => {
     const shopifyOrders = data.orders || [];
 
     for (const order of shopifyOrders) {
-      saveOrderFromShopify(order);
+      const customerName = getCustomerNameFromShopifyOrder(order);
+      saveOrderFromShopify(order, { customerName });
     }
 
     const orders = db
@@ -32,8 +37,8 @@ router.get('/', async (req, res) => {
     res.json({ orders, syncError: null, needsScope: false });
   } catch (err) {
     const shopifyError =
-      err.response?.data?.errors ||
-      err.response?.data?.error ||
+      (err.response && err.response.data && err.response.data.errors) ||
+      (err.response && err.response.data && err.response.data.error) ||
       err.message;
     console.error('Orders fetch error:', shopifyError);
 
@@ -77,7 +82,7 @@ router.post('/:id/cancel', async (req, res) => {
       `/orders/${row.shopify_order_id}/cancel.json`,
       {
         restock: true,
-        reason: req.body?.reason || 'customer',
+        reason: (req.body && req.body.reason) || 'customer',
         email: false,
       }
     );
@@ -95,9 +100,15 @@ router.post('/:id/cancel', async (req, res) => {
 
     res.json({ success: true, order: orderData });
   } catch (err) {
-    console.error('Cancel order error:', err.response?.data || err.message);
+    console.error(
+      'Cancel order error:',
+      (err.response && err.response.data) || err.message
+    );
     res.status(500).json({
-      error: err.response?.data?.errors || err.response?.data?.error || err.message,
+      error:
+        (err.response && err.response.data && err.response.data.errors) ||
+        (err.response && err.response.data && err.response.data.error) ||
+        err.message,
     });
   }
 });

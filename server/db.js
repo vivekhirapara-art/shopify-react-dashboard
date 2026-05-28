@@ -9,7 +9,9 @@ function initDatabase() {
     CREATE TABLE IF NOT EXISTS products (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       shopify_id TEXT UNIQUE NOT NULL,
+      handle TEXT,
       title TEXT NOT NULL,
+      description TEXT,
       price REAL DEFAULT 0,
       stock INTEGER DEFAULT 0,
       status TEXT DEFAULT 'active',
@@ -79,6 +81,12 @@ function initDatabase() {
 
   try {
     db.exec('ALTER TABLE products ADD COLUMN handle TEXT');
+  } catch {
+    /* column already exists */
+  }
+
+  try {
+    db.exec('ALTER TABLE products ADD COLUMN description TEXT');
   } catch {
     /* column already exists */
   }
